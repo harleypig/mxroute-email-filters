@@ -31,6 +31,12 @@
 
 ## Features & fixes
 
+- [ ] Expand `~` in a password-file path. `password_file = "~/pw"` in
+  `config.toml` currently fails with "No such file" naming the literal
+  `~/pw`, which reads as a missing file rather than an unexpanded path.
+  `Path(value).expanduser()` is the whole fix; it was left out of the
+  password-sources change as unrequested scope.
+
 - [ ] **Free-standing comments are dropped on merge.** `sievelib`'s `tosieve`
   re-emits only its name and description markers, so a user's own
   `# this one is for the accountant` disappears the first time mxfilter

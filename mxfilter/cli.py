@@ -135,7 +135,32 @@ def configure(args):
     config = load_config(args)
     config.prompter = getpass
 
+    warn_about_inline_password(args)
+
     return config
+
+
+# ----------------------------------------------------------------------------
+def warn_about_inline_password(args) -> None:
+    """Say what ``--password`` costs, the way ``mysql`` does.
+
+    The flag exists because it was asked for, and the warning exists
+    because what it gives away is not obvious: an argument is readable in
+    the process list by every user on the machine for as long as the
+    command runs, and the shell has already written it to history by the
+    time mxfilter starts.
+
+    The message names no part of the value.
+    """
+    if not getattr(args, "password", None):
+        return
+
+    warn(
+        "a password given on the command line is visible in the process "
+        "list to every user on this machine, and your shell has already "
+        "saved it to history. Prefer --password-file or "
+        "MXROUTE_PASSWORD_FILE."
+    )
 
 
 # ############################################################################
@@ -1042,10 +1067,29 @@ def connection_parser() -> argparse.ArgumentParser:
     group = parser.add_argument_group("connection")
     group.add_argument("--host", help="MXRoute server hostname")
     group.add_argument("--user", help="full email address (the username)")
-    group.add_argument(
+
+    # One credential, given one way. Three equally explicit instructions
+    # about where the password comes from have no natural ranking, so
+    # argparse rejects a second one instead of the tool silently picking a
+    # winner the user would have to know the order to predict.
+    credential = group.add_mutually_exclusive_group()
+    credential.add_argument(
+        "--password-file",
+        dest="password_file",
+        metavar="PATH",
+        help="file whose contents are the password; must be mode 0600 "
+        "(or 0400) and on a Linux filesystem",
+    )
+    credential.add_argument(
         "--password-cmd",
         dest="password_cmd",
         help="command whose stdout is the password (e.g. 'pass show mail')",
+    )
+    credential.add_argument(
+        "-p",
+        "--password",
+        help="the password itself; least safe -- visible in the process "
+        "list and saved to shell history",
     )
     group.add_argument("--imap-host", dest="imap_host")
     group.add_argument("--imap-port", dest="imap_port", type=int)

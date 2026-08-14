@@ -26,11 +26,34 @@ default_folder = "Lists"
 
 Resolution order is **CLI flag > environment > config file > default**.
 
-The password is the one exception. It is never read from the config file
-(only `password_cmd` is), and its own order is `MXROUTE_PASSWORD` >
-`MXROUTE_PASSWORD_CMD` > `--password-cmd` / `password_cmd` > an interactive
-prompt. There is deliberately no `--password` flag: a password given as an
-argument is visible in the process list and your shell history.
+The password has more sources than the other settings, so it has its own
+ladder — the same shape, highest first:
+
+| # | Source |
+|---|--------|
+| 1 | `--password-file`, `--password-cmd`, or `--password` (mutually exclusive) |
+| 2 | `MXROUTE_PASSWORD_FILE` |
+| 3 | `MXROUTE_PASSWORD_CMD` |
+| 4 | `MXROUTE_PASSWORD` |
+| 5 | `password_file` in the config file |
+| 6 | `password_cmd` in the config file |
+| 7 | an interactive prompt |
+
+A flag typed for this run beats a variable that merely happens to be
+exported, and a literal value never beats an instruction about where to
+fetch one. The config file still never holds the password itself — only
+`password_file` or `password_cmd`.
+
+`--password-file` is refused unless the file's mode is `0600` or `0400`; the
+error names the `chmod` that fixes it. Keep that file on the Linux
+filesystem — anything under `/mnt/c` or another Windows mount (WSL) reports
+mode `0777` whatever you set, so it is always refused. Exactly one trailing
+newline is stripped from it, and nothing else, since a trailing space can be
+part of a password.
+
+`--password VALUE` exists and is the **least safe** option: the value is
+visible in the process list to every user on the machine and your shell
+saves it to history. mxfilter warns when you use it.
 
 ## Use
 

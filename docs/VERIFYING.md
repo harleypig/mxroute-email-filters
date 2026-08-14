@@ -24,6 +24,11 @@ Set `host`, `user`, and a password source, per [Configure][config] in the
 README. Have your webmail open in a browser tab; several steps ask you to
 confirm something there.
 
+Any one source will do for a first run: `MXROUTE_PASSWORD_CMD`, a
+`--password-file` whose mode is `0600` (on the Linux filesystem — a Windows
+mount reports `0777` and is refused), `MXROUTE_PASSWORD`, or nothing at all,
+which prompts.
+
 ## 1. `mxfilter test` — touches nothing
 
 ```bash
@@ -36,8 +41,9 @@ writes nothing anywhere.
 **You should see**, in this order:
 
 * Five config lines: `Host`, `User`, `Password`, and the two endpoints.
-  `Password:` reads `set`, `set (via command)`, or `unset`. `unset` is fine —
-  it means you will be prompted.
+  `Password:` reads `set`, `set (via file)`, `set (via command)`,
+  `set (via flag)`, or `unset` — it names the source, never the value.
+  `unset` is fine — it means you will be prompted.
 * `ManageSieve: connected`, then a list of advertised extensions.
 * A table of named extensions with `yes` or `not advertised` beside each.
   **`fileinto` and `imap4flags` must say `yes`** — those are what an ordinary

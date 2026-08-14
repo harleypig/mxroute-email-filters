@@ -33,9 +33,48 @@ FEATURES:
   so `Lists/News` and `INBOX.Lists.News` resolve to whichever spelling the
   account actually uses.
 
+ENHANCEMENTS:
+
+* **A password file source.** `--password-file PATH`,
+  `MXROUTE_PASSWORD_FILE`, and `password_file` in the config file read the
+  credential from a file, which — unlike an environment variable — can be
+  closed to everyone but its owner. mxfilter **refuses** to read a file any
+  group or other bit is set on (so `0600` and `0400` pass, `0644` does not),
+  naming the path, the mode, and the `chmod` that fixes it, and never opening
+  the file — the rule `libpq` applies to `~/.pgpass`, but said out loud
+  rather than by silently ignoring the file. On WSL the file must live on
+  the Linux filesystem, since a Windows mount reports `0777` whatever it is
+  set to. Exactly one trailing newline is stripped and nothing else is — a
+  trailing space can be part of a password. `mxfilter test` reports
+  `set (via file)`.
+* **`--password VALUE` (`-p`), the least safe source.** Added by request, and
+  warned about on stderr the way `mysql` does: an argument is visible in the
+  process list to every user on the machine, and the shell has already
+  written it to history. Prefer `--password-file` or `MXROUTE_PASSWORD_FILE`.
+  This supersedes the earlier note that there is deliberately no
+  `--password` flag.
+* **The three credential flags are mutually exclusive.** `--password-file`,
+  `--password-cmd`, and `--password` are three equally explicit instructions
+  with no natural ranking, so argparse rejects a second one rather than
+  picking a winner the user would have to have memorised.
+
+BUG FIXES:
+
+* **The password resolution order was inverted for flags.**
+  `MXROUTE_PASSWORD` beat an explicit `--password-cmd`, contradicting the
+  `CLI flag > environment > config file > default` rule the rest of the
+  settings follow. The hazard was concrete: with `MXROUTE_PASSWORD` exported
+  for one account, running `--password-cmd` against a **different** account
+  authenticated as the first one — the wrong mailbox, silently, with no error
+  anywhere. The order is now, highest first: an explicit flag →
+  `MXROUTE_PASSWORD_FILE` → `MXROUTE_PASSWORD_CMD` → `MXROUTE_PASSWORD` →
+  `password_file` → `password_cmd` (config file) → the interactive prompt. A
+  flag typed for this run beats an ambient variable, and a literal value
+  never beats an instruction about where to fetch one.
+
 NOTES:
 
-* **Nothing here has run against a live MXroute account.** The 246-test suite
+* **Nothing here has run against a live MXroute account.** The 320-test suite
   is entirely offline, and the live tier (`tests/live/`) is gated behind
   `MXFILTER_LIVE` and has never been exercised.
   [docs/VERIFYING.md](docs/VERIFYING.md) is the ordered first-run procedure,
@@ -45,10 +84,13 @@ NOTES:
   previews and confirms; `--max-messages` (default 500) refuses an
   over-cap batch outright rather than processing a partial set that would
   read as complete.
-* **Credentials never reach output.** There is deliberately no `--password`
-  flag — a password given as an argument is visible in the process list and
-  shell history. Use `MXROUTE_PASSWORD_CMD`, the environment, or the
-  interactive prompt.
+* **Credentials never reach output.** The password is wrapped in a `Secret`
+  that renders `<redacted>` from both `__str__` and `__repr__`, so no
+  `print`, f-string, `%s`, or traceback frame can disclose it; `reveal()` is
+  the only way out and its call sites are pinned by a test. `--password`
+  exists but is the least safe source and warns for the reason above —
+  prefer `--password-file`, `MXROUTE_PASSWORD_FILE`, or
+  `MXROUTE_PASSWORD_CMD`.
 * **MXroute refusals are tiered by confidence.** `redirect` is refused
   because MXroute documents disabling it; `notify` and `vacation` are refused
   as a conservative choice of ours, and say so rather than implying a
