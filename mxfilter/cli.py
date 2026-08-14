@@ -16,6 +16,13 @@ from . import MxFilterError, __version__
 from .config import SIEVE_TLS_MODES, load_config
 from .criteria import COMPARE_OPS, MATCH_MODES, Criteria, escape_sieve_string
 from .imap import ImapSession, decode_header_value, normalize_folder
+from .rules import (
+    CERTAIN,
+    analyze_placement,
+    audit,
+    read_rules,
+    rule_from_criteria,
+)
 from .sieve import (
     MXROUTE_FORBIDDEN_ACTIONS,
     REPORTABLE_EXTENSIONS,
@@ -657,6 +664,128 @@ def cmd_show(args) -> int:
 
 
 # ----------------------------------------------------------------------------
+def describe_rule_condition(rule) -> str:
+    """Render a rule's tests as one line, in evaluation terms."""
+    if not rule.tests and rule.unmodelled:
+        return f"({', '.join(rule.unmodelled)} -- not modelled)"
+
+    joiner = " OR " if rule.combinator == "anyof" else " AND "
+
+    parts = [
+        f"{test.header} {test.match_type} "
+        f"{' | '.join(repr(key) for key in test.keys)}"
+        for test in rule.tests
+    ]
+
+    line = joiner.join(parts) or "(no condition)"
+
+    if rule.unmodelled:
+        line += f"  [+ {', '.join(rule.unmodelled)}: not modelled]"
+
+    return line
+
+
+# ----------------------------------------------------------------------------
+def print_rules(rules) -> None:
+    """Print the rules in the order the server evaluates them.
+
+    Order and ``stop`` are the two facts a diff cannot show, so both are
+    given their own column rather than left to be read out of the source.
+    """
+    if not rules:
+        print("The active script has no rules.")
+
+        return
+
+    print(f"{len(rules)} rule(s), in evaluation order:\n")
+
+    for rule in rules:
+        marker = "  [stop]" if rule.stops else ""
+
+        print(f"  {rule.index + 1}. {rule.name}{marker}")
+        print(f"       when:  {describe_rule_condition(rule)}")
+        print(f"       then:  {', '.join(rule.actions) or '(nothing)'}")
+        print()
+
+
+# ----------------------------------------------------------------------------
+def print_findings(findings, heading: str) -> None:
+    """Print shadow findings, keeping decided ones apart from suspected.
+
+    The marker is the whole point: ``!`` is a fact the reader should act
+    on, ``?`` is something to look at. Rendering them the same way would
+    throw away the distinction the analysis works to preserve.
+    """
+    if not findings:
+        return
+
+    print(heading)
+
+    for finding in findings:
+        mark = "!" if finding.certainty == CERTAIN else "?"
+        verb = (
+            "never runs" if finding.certainty == CERTAIN else "may never run"
+        )
+
+        print(f"  {mark} {finding.narrow!r} {verb} -- {finding.reason}")
+
+    print()
+
+
+# ----------------------------------------------------------------------------
+def cmd_rules(args) -> int:
+    """Show the rules already in the active script, and audit their order."""
+    config = configure(args)
+
+    with SieveSession(config, progress=progress_for(args, "sieve")) as sieve:
+        name = args.script or sieve.active_script_name()
+
+        if not name:
+            raise MxFilterError(
+                "no active script on the server, so there are no rules to "
+                "show. 'mxfilter list' shows what the account has."
+            )
+
+        rules = read_rules(parse_script(sieve.get_script(name)))
+
+        print(f"Script {name!r}:\n")
+        print_rules(rules)
+
+        findings = audit(rules)
+
+        if findings:
+            print_findings(findings, "Rules that cannot fire where they are:")
+
+        elif rules:
+            print("No rule is shadowed by an earlier one.")
+
+    # Reading is the whole command, so a finding is information rather than
+    # a failure. Exiting non-zero here would make the audit unusable in any
+    # pipeline that treats a non-zero exit as an error.
+    return 0
+
+
+# ----------------------------------------------------------------------------
+def warn_about_placement(before: str, name: str, criteria, actions) -> None:
+    """Warn when a rule about to be added would be dead, or would starve.
+
+    Appending is what ``add`` does, so only the first direction can fire
+    today -- but the check is written for both, because the placement flags
+    that make the second reachable are the other half of this same work.
+    """
+    rules = read_rules(parse_script(before))
+
+    stops = any(action[0] == "stop" for action in actions)
+    action_names = tuple(action[0] for action in actions)
+
+    candidate = rule_from_criteria(name, criteria, action_names, stops=stops)
+    analysis = analyze_placement(rules, candidate)
+
+    print_findings(analysis.dead_on_arrival, "\nBefore this rule is reached:")
+    print_findings(analysis.starves, "\nThis rule would come before:")
+
+
+# ----------------------------------------------------------------------------
 def cmd_backup(args) -> int:
     """Save the active script to a file, exactly as the server has it."""
     config = configure(args)
@@ -864,6 +993,11 @@ def run_add(config, args, criteria: Criteria) -> int:
         print(f"\nRule {name!r} on script {script_name!r}:")
         print(f"  when:  {criteria.describe()}")
         print(f"  then:  {describe_actions(actions)}")
+
+        # Read the rules that are already there before showing the diff. A
+        # diff shows what changes; it cannot show that the change lands
+        # after a rule whose stop means it will never be reached.
+        warn_about_placement(before, name, criteria, actions)
 
         diff = script_diff(before, after, script_name)
 
@@ -1332,6 +1466,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     show.add_argument("name", nargs="?", help="script name; default active")
     show.set_defaults(handler=cmd_show)
+
+    rules = subparsers.add_parser(
+        "rules",
+        parents=[common, connection],
+        help="show the rules in order, and which cannot fire",
+        description="List the active script's rules in the order the server "
+        "evaluates them, marking which carry 'stop', then report any rule an "
+        "earlier one makes unreachable. A '!' finding is decided; a '?' is a "
+        "suspicion worth checking. Nothing is changed.",
+    )
+    rules.add_argument("--script", help="script name; default active")
+    rules.set_defaults(handler=cmd_rules)
 
     backup = subparsers.add_parser(
         "backup",
