@@ -83,9 +83,17 @@ whether one exists:
 **rejected on licence**: AGPL-3.0-only against this tool's MIT. It also ships
 no CLI.
 
-The shape this suggests, when the trigger fires: prefer `sieve-test` when
-Dovecot is present because it is bit-for-bit what the server does, and fall
-back to a bundled `go-sieve` binary so the tool works with nothing installed.
+**Decided 2026-08-14 — see [ADR 0004][adr4].** `migadu/go-sieve` is adopted
+as the engine, behind a JSON-emitting wrapper we own, with Dovecot's
+`sieve-test` kept as an optional differential oracle rather than the primary.
+Verified before deciding: MIT, 307 Pigeonhole conformance subtests passing,
+4.9 MB static binary, and correct on this account's real script including
+implicit keep.
+
+What remains iceboxed is the **feature**, not the engine choice: nothing is
+built until the work is actually requested.
+
+[adr4]: adr/0004-adopt-go-sieve-as-the-evaluation-engine.md
 
 This is now an **anticipated** requirement rather than a speculative one,
 because the front-end direction below depends on it. It stays iceboxed all the
