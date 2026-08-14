@@ -11,6 +11,7 @@ the [issue tracker][issues], and deliberate "not now" deferrals in
 |-----|----------|
 | [0001](0001-standalone-cli-over-provider-resource.md) | Sieve filters live in a standalone CLI, not in `terraform-provider-mxroute` |
 | [0002](0002-non-destructive-script-merge.md) | Merge into the active Sieve script; never overwrite it |
+| [0003](0003-python-core-with-per-component-language-choice.md) | Python is the core; another language is allowed per component |
 
 [madr]: https://adr.github.io/madr/
 
