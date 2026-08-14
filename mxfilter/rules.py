@@ -62,6 +62,27 @@ OTHER = "other"
 # not an oversight, so a glob only ever yields POSSIBLE.
 COMPARABLE = ("contains", "is")
 
+# The comparator every comparison below assumes. RFC 5228 makes it the
+# default when a test names none, and requires `i;octet` to exist beside it
+# with no `require` line -- so a script is free to ask for byte comparison,
+# under which the same two keys answer differently. A test naming any other
+# comparator is read and kept, never compared; see `_comparable`.
+ASCII_CASEMAP = "i;ascii-casemap"
+
+# `i;ascii-casemap` folds A-Z, and leaves every other octet exactly alone.
+#
+# Do NOT replace this with `str.casefold()` or `str.lower()`, however much
+# more idiomatic they look. Both implement *Unicode* case folding, which is a
+# different function precisely where it matters: `"ss"` and `"ß"` fold
+# together, so a rule keyed on `"ss"` would be read as covering one keyed on
+# `"ß"` and a perfectly live rule reported dead -- a CERTAIN the server
+# disagrees with, which is the worst thing this module can emit. It is not a
+# quirk of one character either: U+212A KELVIN SIGN folds to `"k"` with no
+# change of length at all. The folding function is the bug, not the input.
+_CASEMAP = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+)
+
 
 # ############################################################################
 # Model
@@ -75,6 +96,13 @@ class HeaderTest:
     header: str
     match_type: str
     keys: tuple[str, ...]
+
+    # The comparator the test named, or Sieve's default when it named none.
+    # Carried rather than dropped because it decides what the match type
+    # *means*: `:contains` under `i;octet` is case-sensitive, so reducing a
+    # byte-comparing test to the same HeaderTest as a case-insensitive one
+    # makes the two look interchangeable when they are not.
+    comparator: str = ASCII_CASEMAP
 
 
 @dataclass(frozen=True)
@@ -173,14 +201,29 @@ def _as_values(argument) -> tuple[str, ...]:
 
 
 # ----------------------------------------------------------------------------
+def _comparator(command) -> str:
+    """Return the comparator a test named, or Sieve's default.
+
+    sievelib splits a tagged argument in two: ``arguments["comparator"]``
+    holds the ``:comparator`` tag itself and ``extra_arguments`` holds its
+    value. Reading the first is what dropping the comparator looked like --
+    it yields the literal ``":comparator"`` and never a comparator name, so
+    the value has to come from ``extra_arguments`` or not at all.
+    """
+    extra = getattr(command, "extra_arguments", {}) or {}
+
+    return _unquote(extra.get("comparator") or "") or ASCII_CASEMAP
+
+
+# ----------------------------------------------------------------------------
 def _header_test(command) -> HeaderTest | None:
     """Reduce a sievelib ``header`` test, or return None if it is not one.
 
-    A ``header`` test may name several headers at once. Splitting it into
-    one HeaderTest per header loses nothing -- Sieve tries every named
-    header and succeeds if any matches, which is exactly the disjunction
-    the caller already handles -- but a multi-header test is returned as a
-    single entry here and expanded by the caller.
+    A ``header`` test may name several headers at once, which is a
+    disjunction: Sieve tries every named header and succeeds if any of them
+    matches. Only the first header is read here; the whole list is expanded
+    by the caller, which is also where the decision about whether that
+    expansion is faithful belongs (see :func:`_read_condition`).
     """
     if getattr(command, "name", None) != "header":
         return None
@@ -198,6 +241,7 @@ def _header_test(command) -> HeaderTest | None:
         header=canonical_header(headers[0]),
         match_type=match_type,
         keys=keys,
+        comparator=_comparator(command),
     )
 
 
@@ -213,7 +257,12 @@ def _expand_headers(command) -> list[HeaderTest]:
     headers = _as_values(arguments.get("header-names"))
 
     return [
-        HeaderTest(canonical_header(name), first.match_type, first.keys)
+        HeaderTest(
+            canonical_header(name),
+            first.match_type,
+            first.keys,
+            first.comparator,
+        )
         for name in headers
     ]
 
@@ -248,11 +297,28 @@ def _read_condition(test) -> tuple[str, list[HeaderTest], list[str]]:
     for child in children:
         expanded = _expand_headers(child)
 
-        if expanded:
-            tests.extend(expanded)
+        if not expanded:
+            leftovers.append(getattr(child, "name", "unknown test"))
+
+        elif combinator == ALLOF and len(expanded) > 1:
+            # `header :contains ["to","cc"] "x"` is an OR. Splitting it into
+            # one test per header is faithful only where the pieces land in
+            # a disjunction -- under `anyof` they join an OR that is already
+            # there. Under `allof` they would become conjuncts, silently
+            # rewriting `(To OR Cc) AND Subject` as `To AND Cc AND Subject`;
+            # and since covering any single conjunct of an `allof` is enough
+            # for CERTAIN, covering just the `To` half would condemn a rule
+            # that a Cc-only message still reaches.
+            #
+            # A flat list of tests has nowhere to put an OR nested inside an
+            # AND, so the honest move is to record what was not modelled
+            # rather than approximate it -- the same treatment a nested
+            # combinator already gets, and it disqualifies the rule from a
+            # confident verdict in either direction.
+            leftovers.append("multi-header test inside allof")
 
         else:
-            leftovers.append(getattr(child, "name", "unknown test"))
+            tests.extend(expanded)
 
     return combinator, tests, leftovers
 
@@ -340,6 +406,52 @@ def rule_from_criteria(
 
 
 # ----------------------------------------------------------------------------
+def _fold(value: str) -> str:
+    """Case-fold a string the way ``i;ascii-casemap`` does, and no further.
+
+    Every comparison in this section goes through here rather than through
+    ``str.casefold()``; the reason that matters, and what breaks when it is
+    "simplified" back, is on :data:`_CASEMAP`.
+    """
+    return value.translate(_CASEMAP)
+
+
+# ----------------------------------------------------------------------------
+def _comparable(test: HeaderTest) -> bool:
+    """Decide whether this module is entitled to compare a test at all.
+
+    Three separate ways a test falls outside what can be decided here. Each
+    degrades a finding to POSSIBLE, which costs a reader a moment; deciding
+    any of them anyway risks a CERTAIN the server disagrees with, which
+    costs them mail.
+
+    * **A match type outside** :data:`COMPARABLE` -- ``:matches`` is glob
+      containment, a real problem this module does not attempt.
+    * **A comparator other than the default.** ``i;octet`` compares bytes,
+      so a test written with it matches strictly less than the same test
+      without it, and the two must not reduce to the same thing. No
+      semantics are invented for it or for any other comparator: the test
+      is simply not compared.
+    * **A key that is not pure ASCII.** ``i;ascii-casemap`` folds A-Z and
+      compares every other octet as-is, so a non-ASCII key is decided by
+      its exact bytes -- and the same text reaches us in more than one
+      encoding of them. A header may arrive MIME-encoded and be decoded by
+      the server (RFC 5228 has implementations compare in UTF-8), and
+      Unicode gives one string several normal forms. So two non-ASCII keys
+      that look equal are not reliably equal, and two that look unrelated
+      are not reliably unrelated. Folding correctly is necessary but not
+      sufficient here; the encoding question sits underneath it.
+    """
+    if test.match_type not in COMPARABLE:
+        return False
+
+    if test.comparator != ASCII_CASEMAP:
+        return False
+
+    return all(key.isascii() for key in test.keys)
+
+
+# ----------------------------------------------------------------------------
 def _key_covered(broad_keys, broad_match, narrow_key, narrow_match) -> bool:
     """Decide whether one key is always caught by a broader test.
 
@@ -360,10 +472,10 @@ def _key_covered(broad_keys, broad_match, narrow_key, narrow_match) -> bool:
       equal the broad key. It falls through to False and is reported, if at
       all, as POSSIBLE.
     """
-    needle = narrow_key.casefold()
+    needle = _fold(narrow_key)
 
     for key in broad_keys:
-        candidate = key.casefold()
+        candidate = _fold(key)
 
         if broad_match == "contains" and candidate in needle:
             return True
@@ -385,13 +497,10 @@ def _test_covers(broad: HeaderTest, narrow: HeaderTest) -> bool:
     A Sieve ``header`` test with several keys succeeds if *any* key matches,
     so covering ``narrow`` means covering every one of its keys.
     """
-    if broad.header.casefold() != narrow.header.casefold():
+    if _fold(broad.header) != _fold(narrow.header):
         return False
 
-    if broad.match_type not in COMPARABLE:
-        return False
-
-    if narrow.match_type not in COMPARABLE:
+    if not _comparable(broad) or not _comparable(narrow):
         return False
 
     return all(
@@ -471,8 +580,8 @@ def _keys_overlap(
     ``:is`` pins the whole value, so it can only overlap a key that fits
     inside it -- and two ``:is`` keys overlap only when they are equal.
     """
-    left = left_key.casefold()
-    right = right_key.casefold()
+    left = _fold(left_key)
+    right = _fold(right_key)
 
     if left_match == "is" and right_match == "is":
         return left == right
@@ -489,13 +598,10 @@ def _keys_overlap(
 # ----------------------------------------------------------------------------
 def _tests_overlap(left: HeaderTest, right: HeaderTest) -> bool:
     """Decide whether two tests could both fire on one message."""
-    if left.header.casefold() != right.header.casefold():
+    if _fold(left.header) != _fold(right.header):
         return False
 
-    if left.match_type not in COMPARABLE:
-        return False
-
-    if right.match_type not in COMPARABLE:
+    if not _comparable(left) or not _comparable(right):
         return False
 
     return any(
@@ -523,8 +629,9 @@ def _possible(broad: Rule, narrow: Rule) -> str:
     So the bar is *plausible overlap*, not a shared header:
 
     * either rule was not fully understood -- genuinely unknown;
-    * a ``:matches`` glob is involved on a shared header -- undecidable
-      here by design;
+    * a test on a shared header that :func:`_comparable` refuses -- a
+      ``:matches`` glob, a non-default comparator, a non-ASCII key -- all
+      undecidable here by design;
     * a broad ``allof`` -- it may or may not fire, depending on the message;
     * the keys actually overlap, one sitting inside the other.
 
@@ -543,17 +650,17 @@ def _possible(broad: Rule, narrow: Rule) -> str:
     if broad.unmodelled or narrow.unmodelled:
         return POSSIBLE
 
-    shared = {test.header.casefold() for test in broad.tests} & {
-        test.header.casefold() for test in narrow.tests
+    shared = {_fold(test.header) for test in broad.tests} & {
+        _fold(test.header) for test in narrow.tests
     }
 
     if not shared:
         return ""
 
     uncomparable = any(
-        test.match_type not in COMPARABLE
+        not _comparable(test)
         for test in (*broad.tests, *narrow.tests)
-        if test.header.casefold() in shared
+        if _fold(test.header) in shared
     )
 
     if uncomparable or not _disjunctive(broad):
