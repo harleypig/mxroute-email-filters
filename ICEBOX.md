@@ -200,6 +200,102 @@ difference from the silent flattening that Jsonnet-as-input causes.
 **stdin** as well as from a file, so layer 2 is possible from day one. Nothing
 else about the decision needs settling up front.
 
+### The schema is provider-agnostic; the files are per-address
+
+**One rule vocabulary across every provider, written to a separate file per
+email address.** Requested 2026-08-14. Those are two different questions and
+it is worth keeping them apart: *what a rule looks like* is shared, *which
+mailbox it applies to* is not.
+
+**The unit is the address, not the provider** — two Gmail accounts get two
+files, the same as Gmail and MXroute do. That is the sharper form of the
+split, and it follows from the stated reason there are no cross-account
+filters wanted: the addresses serve different purposes, so their filter sets
+have nothing to say to each other. Keying files by provider would put two
+unrelated mailboxes in one file for no reason other than that they happen to
+share a vendor.
+
+It also means the file needs to name **which mailbox it is for**, and that
+identifier is the natural join to wherever that account's credentials come
+from — one more reason the schema carries a target rather than inferring one.
+
+The payoff is that the thing you learn once is the rule vocabulary, and only
+the target changes. It also keeps layer 2 (above) useful everywhere, since a
+generator emitting layer 1 does not care who consumes it.
+
+Prior art exists: [SieveRuler][sieveruler] already builds Sieve from
+**provider-neutral JSON** rule documents, so the shape is not speculative.
+
+**What makes it genuinely hard, stated up front rather than discovered:**
+Sieve and Gmail do not merely differ in syntax, they differ in evaluation
+model.
+
+| | Sieve | Gmail |
+|---|---|---|
+| Rule order | significant | **none** — every filter is evaluated |
+| Short-circuit | `stop` | **no equivalent** |
+| Destination | one folder, moved | labels, plural, message stays |
+| Exact match | `:is` | **no exact-match operator** |
+
+So a provider-agnostic schema cannot just be a union of both. Two things make
+it tractable anyway:
+
+- **`criteria.Criteria` is already this abstraction**, one model translated to
+  two backends (Sieve tests and IMAP `SEARCH`). The declarative schema is that
+  same idea with a third and fourth target, not a new invention.
+- **Ordered-to-unordered is a solved transformation.** `gmailctl`'s
+  `chainFilters` ANDs each rule with the negation of every preceding one,
+  which turns an ordered `stop`-terminated chain into mutually exclusive
+  order-independent filters — see [#31][i31]. That is the single hardest part
+  of the mapping and it does not need inventing.
+
+**The honest limit:** some rules will not map, and the schema needs to say so
+out loud rather than silently degrade. `gmailctl` reserves an `isEscaped`
+marker for filters it cannot represent; the equivalent here is a rule that
+declares its provider and is refused by every other backend. Better a loud
+"this rule is MXroute-only" than a quiet approximation that files mail
+somewhere unexpected.
+
+#### Provider-specific parts are visible in the syntax
+
+**Requested 2026-08-14, and it sharpens the limit above from a promise into a
+mechanism.** Anything provider-specific is **namespaced in the key itself** —
+`gmail.<thing>` or `gmail_<thing>`, spelling to be settled — so a reader can
+*see* that a field belongs to one provider instead of having to remember
+which fields behave differently where.
+
+The failure it prevents is worth naming, because it is the one that actually
+happens: a field that exists in both providers and **means something slightly
+different in each**. That is strictly worse than a field that only one
+supports, because nothing looks wrong. The reader recognizes the name, assumes
+the semantics they know, and is wrong. An unprefixed key that quietly changes
+meaning depending on which file it is in is a trap the schema would be
+building on purpose.
+
+Two rules follow, and the second is the one that takes discipline:
+
+- **A bare key means the same thing everywhere.** If it cannot, it does not
+  get to be bare.
+- **When in doubt, prefix.** Promoting a prefixed key to a bare one later is
+  a compatible change — old files keep working. Demoting a bare key once
+  people have written files against it is not. The asymmetry says which way
+  to err.
+
+This also gives the refusal above something concrete to key on: a backend
+rejects any prefix that is not its own, so *"this rule is MXroute-only"* is
+read off the syntax rather than inferred from a rule's contents.
+
+The cost is honest — prefixes are noisier to read and to type, and a schema
+that over-prefixes ends up shouting about differences that do not matter. The
+judgment is which fields are genuinely common, and that is settled per field
+when the schema is written, not now.
+
+Note this constraint is **format-independent** — it survives the YAML/Jsonnet
+question above landing either way, and it applies to whatever layer 1 turns
+out to be.
+
+[i31]: https://github.com/harleypig/mxroute-email-filters/issues/31
+
 ### The acceptance case is already reserved
 
 The live account has three rules that differ only by key and share an action —
