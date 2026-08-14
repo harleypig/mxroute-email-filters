@@ -7,7 +7,8 @@ Resolution order for every setting, highest priority first:
 3. the TOML config file (``$XDG_CONFIG_HOME/mxfilter/config.toml``)
 4. a built-in default
 
-The password is handled separately and never lands in a plain string that
+The password is handled separately -- it has more than one source and its
+own ladder (``Config.password``) -- and never lands in a plain string that
 could be printed by accident -- see the ``Secret`` class below.
 """
 
@@ -29,6 +30,26 @@ DEFAULT_SIEVE_TLS = "starttls"
 DEFAULT_SOURCE_FOLDER = "INBOX"
 
 SIEVE_TLS_MODES = ("starttls", "ssl", "none")
+
+# Every way of supplying a password, in one message, because a user who
+# sees this has just found out that none of them is in place.
+NO_PASSWORD_MESSAGE = (
+    "no password available -- pass --password-file, --password-cmd, or "
+    "--password, set MXROUTE_PASSWORD_FILE, MXROUTE_PASSWORD_CMD, or "
+    "MXROUTE_PASSWORD, or put password_file / password_cmd in the config "
+    "file"
+)
+
+# What password_state() reports for each kind of source. A literal from a
+# flag and one from the environment are the same kind of value and are
+# resolved identically; they are labelled apart only so `mxfilter test` can
+# say which one is in play. No label says anything about the value itself.
+PASSWORD_STATE_LABELS = {
+    "file": "set (via file)",
+    "command": "set (via command)",
+    "flag": "set (via flag)",
+    "env": "set",
+}
 
 
 # ############################################################################
@@ -89,8 +110,27 @@ class Config:
     sieve_tls: str = DEFAULT_SIEVE_TLS
     default_folder: str = ""
     source_folder: str = DEFAULT_SOURCE_FOLDER
-    password_cmd: str = ""
     backup_dir: Path = field(default_factory=lambda: default_backup_dir())
+
+    # The three credential flags. argparse makes them mutually exclusive,
+    # so at most one is ever populated from the command line: they are
+    # three ways of saying the same explicit thing, and ranking equally
+    # explicit instructions against each other would be a rule to
+    # remember rather than a rule to apply.
+    #
+    # ``--password`` lands in ``inline_password`` rather than ``password``
+    # because ``password()`` is the method that resolves the credential,
+    # and a field of that name would shadow it.
+    inline_password: str = field(default="", repr=False)
+    password_file: str = ""
+    password_cmd: str = ""
+
+    # The same two settings as read from the TOML file, kept apart from
+    # the flags because they sit at a different height in the ladder: a
+    # flag beats the environment and the config file does not. Merging
+    # them into one field is what inverted the order previously.
+    toml_password_file: str = ""
+    toml_password_cmd: str = ""
 
     # Supplied by the front-end (the CLI passes getpass). Left None by
     # anything that cannot prompt, which then gets a clean error instead of
@@ -118,26 +158,77 @@ class Config:
         )
 
     # ------------------------------------------------------------------------
+    def password_sources(self) -> list[tuple[str, str]]:
+        """Return the configured password sources, highest priority first.
+
+        Each entry is ``(kind, value)``, where the kind says how to turn
+        the value into a credential -- read a file, run a command, or take
+        it literally -- and the position says which one wins.
+
+        The ladder, and why it is in this order:
+
+        1. an explicit flag (``--password-file``, ``--password-cmd``,
+           ``--password``; mutually exclusive, so only one can appear)
+        2. ``MXROUTE_PASSWORD_FILE``
+        3. ``MXROUTE_PASSWORD_CMD``
+        4. ``MXROUTE_PASSWORD``
+        5. ``password_file`` from the config file
+        6. ``password_cmd`` from the config file
+
+        A flag outranks an ambient variable because it was typed for this
+        run and the variable was not. The failure that ordering prevents
+        is not an inconvenience: with ``MXROUTE_PASSWORD`` exported for one
+        account, a ``--password-cmd`` naming a *second* account used to be
+        ignored, and the command authenticated as the first -- the wrong
+        account, with no error anywhere.
+
+        Within the flags the order is nominal, since argparse rejects more
+        than one; it runs safest-first so a Config assembled by hand
+        (a test, another front-end) still behaves sensibly.
+        """
+        env = os.environ
+
+        candidates = [
+            ("file", self.password_file),
+            ("command", self.password_cmd),
+            ("flag", self.inline_password),
+            ("file", env.get("MXROUTE_PASSWORD_FILE", "")),
+            ("command", env.get("MXROUTE_PASSWORD_CMD", "")),
+            ("env", env.get("MXROUTE_PASSWORD", "")),
+            ("file", self.toml_password_file),
+            ("command", self.toml_password_cmd),
+        ]
+
+        return [(kind, value) for kind, value in candidates if value]
+
+    # ------------------------------------------------------------------------
     def password_state(self) -> str:
-        """Return ``set`` or ``unset`` -- never the credential itself."""
+        """Report whether a credential is available, never what it is.
+
+        Every return value is a fixed literal chosen from
+        ``PASSWORD_STATE_LABELS``; none is derived from the credential, so
+        this is safe to print, log, and put in an error message.
+        """
         if self._password is not None:
             return "set"
 
-        if os.environ.get("MXROUTE_PASSWORD"):
-            return "set"
+        sources = self.password_sources()
 
-        if os.environ.get("MXROUTE_PASSWORD_CMD") or self.password_cmd:
-            return "set (via command)"
+        if not sources:
+            return "unset"
 
-        return "unset"
+        kind, _value = sources[0]
+
+        return PASSWORD_STATE_LABELS[kind]
 
     # ------------------------------------------------------------------------
     def password(self) -> Secret:
         """Resolve the password, asking the prompter only as a last resort.
 
-        Deferred until a connection is actually opened so that ``--help``
-        and the offline code paths never trigger a prompt or run a
-        credential command.
+        The order is ``password_sources()``; the prompt is the last rung
+        below all of them. Resolution is deferred until a connection is
+        actually opened so that ``--help`` and the offline code paths
+        never trigger a prompt or run a credential command.
 
         The interactive prompt itself is *not* implemented here: a core
         module must not own a terminal interaction, or a non-terminal
@@ -148,14 +239,10 @@ class Config:
         if self._password is not None:
             return self._password
 
-        env_value = os.environ.get("MXROUTE_PASSWORD")
-        command = os.environ.get("MXROUTE_PASSWORD_CMD") or self.password_cmd
+        sources = self.password_sources()
 
-        if env_value:
-            self._password = Secret(env_value)
-
-        elif command:
-            self._password = run_password_command(command)
+        if sources:
+            self._password = self._resolve_source(*sources[0])
 
         elif self.prompter is not None:
             self._password = Secret(
@@ -163,18 +250,23 @@ class Config:
             )
 
         else:
-            raise MxFilterError(
-                "no password available -- set MXROUTE_PASSWORD, "
-                "MXROUTE_PASSWORD_CMD, or --password-cmd"
-            )
+            raise MxFilterError(NO_PASSWORD_MESSAGE)
 
         if not self._password:
-            raise MxFilterError(
-                "no password available -- set MXROUTE_PASSWORD, "
-                "MXROUTE_PASSWORD_CMD, or --password-cmd"
-            )
+            raise MxFilterError(NO_PASSWORD_MESSAGE)
 
         return self._password
+
+    # ------------------------------------------------------------------------
+    def _resolve_source(self, kind: str, value: str) -> Secret:
+        """Turn one ``(kind, value)`` source into a credential."""
+        if kind == "file":
+            return read_password_file(Path(value))
+
+        if kind == "command":
+            return run_password_command(value)
+
+        return Secret(value)
 
     # ------------------------------------------------------------------------
     def require(self, *names: str) -> None:
@@ -229,6 +321,89 @@ def read_config_file(path: Path) -> dict:
 
     except OSError as exc:
         raise MxFilterError(f"{path}: cannot read -- {exc}") from exc
+
+
+# ----------------------------------------------------------------------------
+def check_password_file_mode(path: Path) -> None:
+    """Refuse a password file that group or other can reach.
+
+    Any bit in ``0o077`` means somebody other than the owner can read the
+    credential, so ``0600`` and ``0400`` pass and ``0640``, ``0604``,
+    ``0644`` and the rest do not. The owner's own bits are not our
+    business; only shared access is.
+
+    The check runs before the file is opened, so a file with a bad mode is
+    never read at all. ``libpq`` treats ``~/.pgpass`` the same way, except
+    that it silently ignores the file; this names it and stops, because
+    here the file was asked for by name and ignoring it would send the
+    caller down the rest of the ladder without saying so.
+    """
+    try:
+        mode = path.stat().st_mode & 0o777
+
+    except OSError as exc:
+        raise MxFilterError(
+            f"{path}: cannot read password file -- {exc}"
+        ) from exc
+
+    if not mode & 0o077:
+        return
+
+    raise MxFilterError(
+        f"password file {path} is readable by group/other (mode {mode:04o}); "
+        f"mxfilter refuses to read it. Fix with: chmod 600 {path}"
+    )
+
+
+# ----------------------------------------------------------------------------
+def read_password_file(path: Path) -> Secret:
+    """Read a password from a file, checking its mode first.
+
+    Exactly one trailing newline is removed, the one every editor adds,
+    and nothing else. Trailing spaces are left alone, because a space can
+    be part of a password and eating it silently produces an
+    authentication failure with no visible cause.
+
+    A file that holds nothing but whitespace is refused rather than
+    treated as a password of spaces: it is the shape an empty or
+    half-written file takes, and the same unexplainable auth failure is
+    the alternative.
+
+    No error here quotes the file's contents, only its path.
+    """
+    check_password_file_mode(path)
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+
+    except OSError as exc:
+        raise MxFilterError(
+            f"{path}: cannot read password file -- {exc}"
+        ) from exc
+
+    except UnicodeDecodeError as exc:
+        raise MxFilterError(
+            f"{path}: password file is not valid UTF-8 -- {exc.reason}"
+        ) from exc
+
+    value = strip_one_newline(raw)
+
+    if not value.strip():
+        raise MxFilterError(f"{path}: password file is empty")
+
+    return Secret(value)
+
+
+# ----------------------------------------------------------------------------
+def strip_one_newline(text: str) -> str:
+    """Remove a single trailing ``\\n`` or ``\\r\\n``, and nothing else."""
+    if text.endswith("\r\n"):
+        return text[:-2]
+
+    if text.endswith("\n"):
+        return text[:-1]
+
+    return text
 
 
 # ----------------------------------------------------------------------------
@@ -381,8 +556,14 @@ def load_config(args) -> Config:
             file_values.get("source_folder"),
             default=DEFAULT_SOURCE_FOLDER,
         ),
-        password_cmd=_pick(
-            flag("password_cmd"), file_values.get("password_cmd"), default=""
-        ),
+        # Four fields rather than two: which source a credential came from
+        # is what decides the order, so collapsing a flag and a config-file
+        # value into one field would throw the answer away before
+        # password_sources() is ever asked the question.
+        inline_password=_pick(flag("password"), default=""),
+        password_file=_pick(flag("password_file"), default=""),
+        password_cmd=_pick(flag("password_cmd"), default=""),
+        toml_password_file=_pick(file_values.get("password_file"), default=""),
+        toml_password_cmd=_pick(file_values.get("password_cmd"), default=""),
         backup_dir=Path(backup_dir) if backup_dir else default_backup_dir(),
     )

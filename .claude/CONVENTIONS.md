@@ -197,10 +197,34 @@ and it is enforced by construction rather than by care:
 - The real value is reachable **only** through `Secret.reveal()`, which is
   greppable and therefore reviewable. Call it only when handing the password
   to a connection method — never to display, log, or format it.
-- The password is sourced from `MXROUTE_PASSWORD`, `MXROUTE_PASSWORD_CMD` /
-  `--password-cmd` (preferred — it keeps the value out of the environment), or
-  an interactive `getpass` prompt. It is **never** read from the TOML config
-  file.
+- The password resolves through its own ladder, highest first: **an explicit
+  flag** (`--password-file`, `--password-cmd`, `--password` — argparse makes
+  them mutually exclusive) → `MXROUTE_PASSWORD_FILE` → `MXROUTE_PASSWORD_CMD`
+  → `MXROUTE_PASSWORD` → `password_file` → `password_cmd` (config file) → an
+  interactive `getpass` prompt. Two rules produce that order, and both are
+  load-bearing:
+  - **A flag beats an ambient variable.** It was typed for *this* run; the
+    variable merely happens to be exported. The inverse — which is what the
+    code did until the ladder was fixed — silently authenticates as the
+    wrong account when `MXROUTE_PASSWORD` is exported for one mailbox and
+    `--password-cmd` names another.
+  - **A literal value never beats an instruction about where to fetch one.**
+- The **literal password is never read from the TOML config file** — only
+  `password_file` and `password_cmd` are. That is unchanged.
+- **A password file is refused, not warned about, when its mode lets anyone
+  else read it.** Any bit in `0o077` is a refusal naming the path, the mode,
+  and the `chmod` that fixes it; the file is not opened at all. `libpq`
+  applies the same rule to `~/.pgpass`, except that it ignores the file
+  silently — here the file was named explicitly, so falling through the rest
+  of the ladder without saying so would be worse than stopping. Note for
+  WSL: a file on a Windows mount reports
+  `0777` regardless of intent, so the file has to live on the Linux
+  filesystem — do **not** add a filesystem exception to the check.
+- **`--password` is deliberately the least safe rung and says so.** It exists
+  because it was asked for; `cli.py` warns on stderr that an argument is
+  visible in the process list and saved to shell history. The warning is
+  presentation and stays in the CLI; the mode refusal is behaviour and stays
+  in the core.
 - The same bar binds test doubles and throwaway debug shims. To tell two
   credentials apart, emit a non-reversible discriminator (a literal
   `set`/`unset`, a length, a short hash prefix) — never the value. See the
