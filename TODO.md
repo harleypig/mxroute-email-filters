@@ -1,0 +1,42 @@
+# TODO
+
+## Testing
+
+- [x] Land the offline unit tier (`tests/`) — 222 passing, shape per
+  [`.claude/TESTS.md`](.claude/TESTS.md). The Roundcube-script case was
+  written first and immediately earned its keep: it found that `sievelib`
+  drops Roundcube's `# rule:[name]` markers, renaming every webmail-authored
+  filter to `Unnamed rule N` on the first merge.
+- [ ] Add the backup-and-restore fixture the live tier requires before any
+  test is allowed to write to a real account
+  ([`tests/live/conftest.py`](tests/live/conftest.py) names it as the
+  prerequisite). Until it exists, the live tier stays read-only.
+- [ ] Exercise the whole flow against a **real MXroute account** (the live
+  tier, `MXFILTER_LIVE=1`). This is also what settles the unconfirmed protocol
+  facts in [`.claude/CONVENTIONS.md`](.claude/CONVENTIONS.md) › *Confidence* —
+  the ManageSieve port and its TLS mode, whether `notify` and `vacation` are
+  actually disabled, the folder delimiter, the spam folder's real name, and
+  which script name Roundcube's managesieve plugin writes. **Record each
+  answer back into that section** as it lands, moving it up a confidence tier.
+
+## Tooling
+
+- [ ] Wire `pyright` (`pyright.md`) and a CI workflow once there is a suite to
+  run. Both are marked **Planned** in the QA status table, and CI is the
+  precondition for revisiting the merge sentinels
+  ([`.claude/CONVENTIONS.md`](.claude/CONVENTIONS.md) › *Merge policy*).
+
+## Features & fixes
+
+- [ ] **Free-standing comments are dropped on merge.** `sievelib`'s `tosieve`
+  re-emits only its name and description markers, so a user's own
+  `# this one is for the accountant` disappears the first time mxfilter
+  merges into the script. No rule is lost — bodies and names both survive
+  ([ADR 0002](adr/0002-non-destructive-script-merge.md) › *What "survives"
+  means*) — but the user's intent is, and it goes the quiet way: discovered
+  days later, with nothing connecting it to a command that reported success.
+  The fix has a known shape: the lexer-token rewriter added for the
+  `# rule:[...]` translation (`sieve._rewrite_hash_comments`) already
+  identifies comment tokens precisely, so the work is capturing the
+  free-standing ones with their anchor position and re-emitting them, not
+  finding them.

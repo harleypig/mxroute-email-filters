@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mxfilter"
+version = "0.1.0"
+description = "Manage MXRoute email filters over ManageSieve and IMAP"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "sievelib>=1.5.0",
+  "IMAPClient>=3.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.16",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+mxfilter = "mxfilter.cli:main"
+
+[tool.setuptools]
+packages = ["mxfilter"]
+
+[tool.ruff]
+line-length = 79
+
+# `target-version` is deliberately not set: ruff infers it from the
+# `requires-python` above, so there is one place to bump the floor, not two.
+
+[tool.ruff.lint]
+# The E subset is deliberate rather than a bare "E": E2xx is whitespace and
+# comment style, which is the formatter's business, and `ruff format` already
+# gates it. The separators every module uses -- the thick `# ####` section
+# rule and the thin `# ----` function rule (code-style.md) -- are written in
+# the spacing the formatter emits, so nothing here is excluded to
+# accommodate them.
+select = ["E4", "E7", "E9", "E501", "F", "I", "B", "C4", "SIM", "UP", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "live: hits a real MXroute account and mutates real state; also gated on MXFILTER_LIVE=1",
+]

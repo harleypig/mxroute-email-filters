@@ -1,0 +1,22 @@
+# Virtualenv
+.venv/
+
+# Python bytecode / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Local credentials and machine-local config — never commit these
+.env
+config.toml
+
+# Backups of the live Sieve script, written before each upload
+backups/
+*.sieve.bak
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

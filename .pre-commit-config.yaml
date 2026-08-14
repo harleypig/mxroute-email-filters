@@ -1,0 +1,39 @@
+# Check-only pre-commit hooks (the non-modifying gate). Auto-fixers live in
+# .pre-commit-config-fix.yaml — run that once as a prep step, then this to
+# confirm clean (the fix-then-check discipline in the global rules/pre-commit.md).
+# There is no CI workflow yet, so this config IS the authoritative gate:
+# `ruff check` and `ruff format --check` run here rather than only verifying a
+# config the way the sibling provider's golangci-lint hook does.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: no-commit-to-branch
+        args: [--branch, master]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-yaml
+      - id: detect-private-key
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.3
+    hooks:
+      - id: ruff-check           # `ruff check` — lint, no fixes applied
+      - id: ruff-format          # `ruff format --check` — formatting is a gate
+        args: [--check]
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.48.0
+    hooks:
+      - id: markdownlint-docker

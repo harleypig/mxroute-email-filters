@@ -1,0 +1,25 @@
+# Auto-fixing pre-commit hooks (modifying). Run ONCE as a prep step before
+# committing:
+#   pre-commit run --all-files --config .pre-commit-config-fix.yaml
+# then run the check config. Never mid-session, per the global rules/pre-commit.md.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.3
+    hooks:
+      # Lint-fix BEFORE formatting: `ruff check --fix` rewrites code (a
+      # pyupgrade, a comprehension rewrite) that `ruff format` then normalizes.
+      # The reverse order leaves the tree unformatted (global rules/ruff.md).
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.48.0
+    hooks:
+      - id: markdownlint-fix-docker

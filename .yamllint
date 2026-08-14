@@ -1,0 +1,12 @@
+extends: default
+
+rules:
+  line-length:
+    max: 160
+    level: warning
+  document-start: disable
+  comments-indentation: disable
+  truthy:
+    check-keys: false            # allow a future GitHub Actions `on:` key
+  indentation:
+    spaces: 2
