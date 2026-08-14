@@ -22,6 +22,51 @@ Distribution name and package are both `mxfilter`; the console entry point is
 `mxfilter = "mxfilter.cli:main"`. It is **not published anywhere** — see
 [RELEASING.md](../RELEASING.md).
 
+### The scoping rule
+
+Stated by the operator, 2026-08-14, and recorded because it settles scope
+questions rather than merely describing the tool:
+
+> The general purpose of this app is to create ways of managing filters and
+> settings, either by switch or automation.
+
+Read it as a **test to apply**, not a mission statement. "Is this in scope?"
+becomes *is it a filter or a setting, and is there no way to manage it here?*
+— and if so, the answer is yes, without needing a decision.
+
+Two words carry the weight:
+
+- **Settings, not just filters.** A folder's subscription state, a rule's
+  position, a capability the account has — anything the account holds that a
+  user might want to change is in scope. The two halves in *What this is*
+  above are what the tool was **built** for; they are not its boundary.
+- **By switch or automation.** Both, and neither is the poor relation. A
+  thing you can only do by hand and a thing you can only get as a side effect
+  of something else are each half-built.
+
+**What this rules out** matters as much: reading a setting, warning about it,
+and telling the user to go fix it somewhere else. That is the shape a
+management tool should not end on — it is a report wearing a command's
+clothes.
+
+It cuts the other way too. Scope is not *everything about email*: reading
+mail, composing, an address book, and account provisioning are not filters or
+settings on this account, and the sibling
+[terraform-provider-mxroute][provider] owns account state as code (see *The
+sibling repository* below).
+
+**A worked example**, so this reads as a rule rather than a slogan. Four
+observations came out of the subscription work
+([#38](https://github.com/harleypig/mxroute-email-filters/issues/38)) and
+were surfaced as open questions: no CLI way to subscribe an existing folder;
+`folders` and `test` silent about subscription; an unsubscribed folder left
+alone; a flag with no effect. Applying the rule, three are not questions at
+all — subscription is a setting, so exposing it is in scope by definition
+([#42](https://github.com/harleypig/mxroute-email-filters/issues/42)) — and
+the fourth is a plain bug
+([#43](https://github.com/harleypig/mxroute-email-filters/issues/43)).
+Asking was the error.
+
 Built on two libraries, both of which the code wraps rather than exposes:
 
 - **`sievelib` (≥ 1.5.0)** — the ManageSieve client (`sievelib.managesieve`),
