@@ -1,10 +1,25 @@
 ## Unreleased
 
-Nothing has been released yet — `mxfilter` is pre-`v0.1.0` and is not
-published anywhere (see [RELEASING.md](RELEASING.md)). Entries accumulate here
-under the usual headings — `BREAKING CHANGES:`, `FEATURES:`, `ENHANCEMENTS:`,
-`BUG FIXES:`, `NOTES:` — and move under a `## X.Y.Z` heading when a tag is
-cut.
+Entries accumulate here under the usual headings — `BREAKING CHANGES:`,
+`FEATURES:`, `ENHANCEMENTS:`, `BUG FIXES:`, `NOTES:` — and move under a
+`## X.Y.Z` heading when a tag is cut.
+
+## 0.1.0
+
+Released 2026-08-14. The first tagged version; everything below is the work
+up to that point rather than a set of changes against a predecessor.
+
+**`v0.y.z` means alpha.** Per the global `git.md`, a zero major says breakage
+is expected and the `y.z` split is deliberately loose. This tag is a marker
+on history, not a stability promise, and it **publishes nothing** — there is
+no registry and no release pipeline (see [RELEASING.md](RELEASING.md)).
+
+Two names in here are already known to be wrong and are expected to change:
+the distribution is called `mxfilter` and the repo `mxroute-email-filters`,
+while the tool now manages settings as well as filters and is being pointed
+at providers other than MXroute. Tracked as
+[#45](https://github.com/harleypig/mxroute-email-filters/issues/45). Nothing
+being published is what keeps that cheap.
 
 FEATURES:
 
