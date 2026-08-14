@@ -35,6 +35,21 @@ FEATURES:
 
 ENHANCEMENTS:
 
+* **`mxfilter rules` — see what is already there, in evaluation order.**
+  Lists the active script's rules in the order the server runs them, marks
+  which carry `stop`, and reports any rule an earlier one makes unreachable.
+  Sieve is order-dependent and `stop` ends evaluation, so a rule appended to
+  the end can be dead the moment it is written — and `add` reported success
+  either way. `add` now warns before the diff, since a diff can show what
+  changes but not that the change lands after a rule that stops.
+
+  Findings come in two tiers and the split is deliberate: `!` is decided, `?`
+  is worth checking. Only substring containment on one header, with
+  comparable match types and Sieve's default comparator, decides anything —
+  a glob, a multi-condition `allof`, an explicit `:comparator`, a non-ASCII
+  key, or a condition outside the model can never be more than a suspicion.
+  Asserting that a live rule is dead is worse than staying quiet.
+
 * **`mxfilter backup` — save the active script on demand.** Fetches the active
   script and writes it to a file, changing nothing on the server. The file is
   the server's **exact bytes**: no banner lines, nothing reformatted, no
