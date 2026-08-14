@@ -174,7 +174,7 @@ about MXroute's configuration** is not.
   a reader and is therefore *not* a backup, which is exactly the trap
   redirecting `show` to a file used to set. There is no restore path: putting
   a file back needs another ManageSieve client, and building one is its own
-  change ([TODO][todo]).
+  change ([#13][i13]).
 - **Show, then change.** Every mutating subcommand works out what would
   change, shows it (a diff for the script, a preview for the messages), and
   only then applies it. `--dry-run` stops after the "show it" step.
@@ -264,6 +264,32 @@ Two practical consequences:
 - **Filters cannot belong there.** The REST API the provider is built on has
   no Sieve surface at all ([ADR 0001][adr1]).
 
+## Where work is tracked
+
+Work is tracked as **GitHub issues**, not in a planning file. The sentinel
+the global `todo.md` reads:
+
+tracker: github
+
+`TODO.md` is gone, and every open item it held was migrated to an issue. A
+repo carrying both grows two answers to "what is left to do", and the file is
+always the stale one — it has no assignee, no labels, no cross-references, and
+nothing closes it when a PR lands.
+
+Two things follow, which is why this is a declared sentinel rather than a
+habit:
+
+- **A captured follow-up becomes an issue**, reconciled against the existing
+  ones rather than appended blindly.
+- **Every issue carries a `role:*` label.** An open issue without one has not
+  been triaged (`labels.md`), and that absence is the signal a sweep keys on.
+
+**Deferred work is still not an issue.** A considered "not now" belongs in
+[ICEBOX.md](../ICEBOX.md) with its trigger, or as an `ICEBOX:` marker at the
+relevant code. Issues are for work someone intends to do; the icebox is for
+decisions taken and parked. Filing a deferral as an issue is how a tracker
+stops being readable.
+
 ## Toolchain & reproducibility
 
 - **Python ≥ 3.11** (`requires-python` in `pyproject.toml`), developed inside
@@ -308,12 +334,12 @@ Full dimension status:
 |-----------|--------|
 | 1. Format | **Active** — `ruff format` |
 | 2. Lint | **Active** — `ruff check` |
-| 3. Type-check | **Planned** — the package is fully annotated but nothing gates it; wire `pyright` (`pyright.md`) alongside the test suite ([TODO][todo]) |
+| 3. Type-check | **Planned** — the package is fully annotated but nothing gates it; wire `pyright` (`pyright.md`) ([#10][i10]) |
 | 4. Code smell / complexity | **Active** — ruff `B`/`C4`/`SIM`/`UP`/`RUF` |
 | 5. Security | **Active (secrets only)** — `gitleaks`, `detect-private-key`. SAST is **Off**: the attack surface is two outbound TLS client sessions and no untrusted input parsing beyond the user's own Sieve script |
 | 6. Tests | **Active** — the offline tier is green (`make test` / `pytest`); see [TESTS.md](TESTS.md) |
 | 7. UI/UX & accessibility | **N/A** — a CLI with no UI. Terminal output legibility is covered by the *show, then change* convention |
-| 8. End-to-end | **Scaffolded, gated** — `tests/live/` exists and skips unless `MXFILTER_LIVE=1`; it has never run against a real account ([TODO][todo]) |
+| 8. End-to-end | **Scaffolded, gated** — `tests/live/` exists and skips unless `MXFILTER_LIVE=1`; it has never written to a real account ([#9][i9]) |
 | 9. Compatibility | **N/A** — single target (CPython ≥ 3.11); no external contract we publish |
 | 10. Performance & load | **N/A** — interactive, single-mailbox, human-scale. Revisit only if a retroactive pass over a very large folder proves slow |
 | 11. Reliability & observability | **N/A** — a one-shot CLI, not a service. Its reliability property is the backup-before-upload convention |
@@ -359,4 +385,6 @@ Full dimension status:
 [adr1]: ../adr/0001-standalone-cli-over-provider-resource.md
 [adr2]: ../adr/0002-non-destructive-script-merge.md
 [provider]: https://github.com/harleypig/terraform-provider-mxroute
-[todo]: ../TODO.md
+[i9]: https://github.com/harleypig/mxroute-email-filters/issues/9
+[i13]: https://github.com/harleypig/mxroute-email-filters/issues/13
+[i10]: https://github.com/harleypig/mxroute-email-filters/issues/10

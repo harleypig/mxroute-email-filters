@@ -5,11 +5,11 @@ regression test per bug, a manual verification note per feature); `python.md`
 carries the layout convention (`tests/` at the repo root, mirroring the
 package). This file records what belongs here.
 
-**The offline tier is written and green** — 222 passing, 3 live-gated skips.
+**The offline tier is written and green** — 347 passing, 3 live-gated skips.
 The live tier is scaffolded (`tests/live/`) and skipped by default; it stays
 open until it has run against a real account, and the backup-and-restore
 fixture required before anything writes to one is still outstanding
-([TODO.md](../TODO.md)).
+([#9](https://github.com/harleypig/mxroute-email-filters/issues/9)).
 
 ## Two tiers
 

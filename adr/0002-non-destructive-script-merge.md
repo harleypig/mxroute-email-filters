@@ -36,7 +36,7 @@ The gap is `sievelib`'s renderer: `tosieve` re-emits only the name and
 description markers, so any other comment in the user's script is dropped on
 the first merge. That is a real loss of the user's *intent* even though no
 rule is lost, and it surfaces the same way this ADR describes — quietly, days
-later. It is tracked as a defect in [TODO.md](../TODO.md) rather than left
+later. It is tracked as a defect in [#7](https://github.com/harleypig/mxroute-email-filters/issues/7) rather than left
 implied by an over-strong claim here.
 
 **Rule identity spans two dialects.** Roundcube's managesieve plugin — the

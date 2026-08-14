@@ -63,7 +63,7 @@ ENHANCEMENTS:
 * **Still no restore command.** The file is the server's exact bytes, and
   putting one back needs another ManageSieve client (`sieve-connect`, or a
   panel filter UI that exposes a raw import). `backup --help` says so, and a
-  `restore` subcommand is tracked in [TODO.md](TODO.md): it is a write path
+  `restore` subcommand is tracked in [#13](https://github.com/harleypig/mxroute-email-filters/issues/13): it is a write path
   against a live account and deserves its own confirmation flow and tests.
 * **A password file source.** `--password-file PATH`,
   `MXROUTE_PASSWORD_FILE`, and `password_file` in the config file read the
