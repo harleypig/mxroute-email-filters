@@ -262,3 +262,66 @@ the repo, for the same reason
 
 [gmailctl]: https://github.com/mbrt/gmailctl
 [sieveruler]: https://github.com/SeWieland/Transiever.SieveRuler
+
+## Per-folder retention — expire mail after N days
+
+`ICEBOX:` retention, expiry, expire, auto-delete, age out, prune folder,
+cleanup old mail, time limit, TTL, mailbox housekeeping — **trigger: requested
+directly.**
+
+Give a folder a maximum age and let mxfilter enforce it: `Github.Notifications`
+holds nothing older than seven days, `Github.Billing` keeps everything.
+
+**It is not filtering, and the difference is the point.** A Sieve rule decides
+where a message goes **at delivery**, once. Retention acts on mail that is
+already filed, **repeatedly, as it ages** — the same message is untouched on
+day six and deleted on day eight. Sieve cannot express it: there is no verb
+that runs later.
+
+Server-side expiry does exist — Dovecot's `expire` plugin — but it is
+configured by the **server administrator**, so it is unavailable on shared
+hosting. Client-side is the only path, which is the same reason the
+retroactive pass exists at all.
+
+### The machinery is already here
+
+`SEARCH BEFORE <date>` in a folder, then act on what comes back. That is the
+retroactive pass with an age predicate instead of a criteria set, so this
+mostly reuses what exists rather than adding a subsystem.
+
+### It would be the most dangerous thing the tool does
+
+Everything else is reversible. A move can be moved back; a bad Sieve rule can
+be replaced from a backup. **This deletes mail on a schedule,
+unattended**, and a wrong number in a config file is discovered only by
+noticing an absence,
+which nobody does. Design constraints follow from that:
+
+- **Retention is opt-in per folder, and the default is keep forever.** Never a
+  global default, never inherited by a subfolder — `Github.Billing` must not
+  acquire a policy because `Github` has one.
+- **Move to Trash, do not expunge.** Trash has its own expiry, so this becomes
+  two independent decisions instead of one irreversible act, and leaves a
+  window to notice a mistake.
+- **Dry-run is the default for a first run against a folder**, and the preview
+  says how many and how old — "delete 340 messages older than 7 days from
+  Github.Notifications" is checkable in a way "apply retention" is not.
+- **Never act on a folder not named in the config**, even for a rule that
+  would match. Retention is explicit or it does not happen.
+
+### Open
+
+- **Where does the schedule live?** Retention only means anything if it runs
+  repeatedly, and mxfilter is a one-shot CLI. Cron or a systemd timer keeps
+  the tool a CLI; a daemon is a different product. Almost certainly the
+  former, but
+  it decides how the config and reporting are shaped.
+- **Age from what?** `INTERNALDATE` (when the server received it) or the `Date:`
+  header (what the sender claimed)? They differ, and the header is
+  attacker-controlled. `INTERNALDATE` is almost certainly right, and is what
+  `BEFORE` uses.
+- Whether "keep the newest N" is wanted as well as "keep the last N days".
+
+Prior art is client-side, not server-side: Thunderbird and Claws both offer
+per-folder message expiry, which is evidence the shape is right and worth
+reading before designing the config.
