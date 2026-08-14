@@ -200,6 +200,68 @@ difference from the silent flattening that Jsonnet-as-input causes.
 **stdin** as well as from a file, so layer 2 is possible from day one. Nothing
 else about the decision needs settling up front.
 
+### The schema is provider-agnostic; the files are per-address
+
+**One rule vocabulary across every provider, written to a separate file per
+email address.** Requested 2026-08-14. Those are two different questions and
+it is worth keeping them apart: *what a rule looks like* is shared, *which
+mailbox it applies to* is not.
+
+**The unit is the address, not the provider** — two Gmail accounts get two
+files, the same as Gmail and MXroute do. That is the sharper form of the
+split, and it follows from the stated reason there are no cross-account
+filters wanted: the addresses serve different purposes, so their filter sets
+have nothing to say to each other. Keying files by provider would put two
+unrelated mailboxes in one file for no reason other than that they happen to
+share a vendor.
+
+It also means the file needs to name **which mailbox it is for**, and that
+identifier is the natural join to wherever that account's credentials come
+from — one more reason the schema carries a target rather than inferring one.
+
+The payoff is that the thing you learn once is the rule vocabulary, and only
+the target changes. It also keeps layer 2 (above) useful everywhere, since a
+generator emitting layer 1 does not care who consumes it.
+
+Prior art exists: [SieveRuler][sieveruler] already builds Sieve from
+**provider-neutral JSON** rule documents, so the shape is not speculative.
+
+**What makes it genuinely hard, stated up front rather than discovered:**
+Sieve and Gmail do not merely differ in syntax, they differ in evaluation
+model.
+
+| | Sieve | Gmail |
+|---|---|---|
+| Rule order | significant | **none** — every filter is evaluated |
+| Short-circuit | `stop` | **no equivalent** |
+| Destination | one folder, moved | labels, plural, message stays |
+| Exact match | `:is` | **no exact-match operator** |
+
+So a provider-agnostic schema cannot just be a union of both. Two things make
+it tractable anyway:
+
+- **`criteria.Criteria` is already this abstraction**, one model translated to
+  two backends (Sieve tests and IMAP `SEARCH`). The declarative schema is that
+  same idea with a third and fourth target, not a new invention.
+- **Ordered-to-unordered is a solved transformation.** `gmailctl`'s
+  `chainFilters` ANDs each rule with the negation of every preceding one,
+  which turns an ordered `stop`-terminated chain into mutually exclusive
+  order-independent filters — see [#31][i31]. That is the single hardest part
+  of the mapping and it does not need inventing.
+
+**The honest limit:** some rules will not map, and the schema needs to say so
+out loud rather than silently degrade. `gmailctl` reserves an `isEscaped`
+marker for filters it cannot represent; the equivalent here is a rule that
+declares its provider and is refused by every other backend. Better a loud
+"this rule is MXroute-only" than a quiet approximation that files mail
+somewhere unexpected.
+
+Note this constraint is **format-independent** — it survives the YAML/Jsonnet
+question above landing either way, and it applies to whatever layer 1 turns
+out to be.
+
+[i31]: https://github.com/harleypig/mxroute-email-filters/issues/31
+
 ### The acceptance case is already reserved
 
 The live account has three rules that differ only by key and share an action —
