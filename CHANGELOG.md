@@ -35,6 +35,21 @@ FEATURES:
 
 ENHANCEMENTS:
 
+* **Placement control on `add` and `from-message` — `--first`, `--last`,
+  `--before NAME`, `--after NAME`.** A rule used to be appended and nothing
+  else, which is the wrong default once order matters: the first matching
+  rule that carries `stop` wins, so where a rule goes decides whether it
+  ever fires. The flags are mutually exclusive; `--last` remains the default.
+
+  Two things worth knowing. With `--replace`, a placement flag **moves** the
+  rule and no flag leaves it where it was — an explicit placement is an
+  instruction, and quietly ignoring it would be the same silent success
+  these warnings exist to remove. And `--before` / `--after` match a rule
+  name **exactly**: no case folding, no whitespace forgiveness, and an error
+  listing the known names if nothing matches. Note that Roundcube's
+  `# rule:[Name ]` marker parses with the trailing space stripped, so a name
+  copied verbatim out of a script is not always the name the script holds.
+
 * **`mxfilter rules` — see what is already there, in evaluation order.**
   Lists the active script's rules in the order the server runs them, marks
   which carry `stop`, and reports any rule an earlier one makes unreachable.

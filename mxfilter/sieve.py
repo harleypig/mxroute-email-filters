@@ -16,6 +16,7 @@ import os
 import re
 import ssl
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from sievelib import factory, parser
@@ -28,10 +29,15 @@ from .config import Config
 __all__ = [
     "FILTERSET_NAME",
     "MXROUTE_FORBIDDEN_ACTIONS",
+    "PLACE_AFTER",
+    "PLACE_BEFORE",
+    "PLACE_FIRST",
+    "PLACE_LAST",
     "REPORTABLE_EXTENSIONS",
     "ROUNDCUBE_NAME_MARKER",
     "SIEVELIB_NAME_MARKER",
     "UNIMPLEMENTED_ACTIONS",
+    "Placement",
     "SieveSession",
     "backup_path",
     "backup_script",
@@ -40,6 +46,7 @@ __all__ = [
     "remove_rule",
     "render_script",
     "resolve_backup_target",
+    "resolve_position",
     "rule_names",
     "script_diff",
     "write_backup",
@@ -124,6 +131,29 @@ FILTERSET_NAME = "mxfilter"
 # there keep their names through a merge.
 ROUNDCUBE_NAME_MARKER = re.compile(r"#\s*rule:\[(?P<name>.+)\]")
 SIEVELIB_NAME_MARKER = "# Filter: "
+
+# Where a rule goes, as the four CLI flags spell it. Sieve evaluates rules in
+# order and `stop` ends evaluation, so position is part of what a rule
+# *means* -- appending is a choice, not a neutral default, and these are the
+# vocabulary for saying so.
+PLACE_FIRST = "first"
+PLACE_LAST = "last"
+PLACE_BEFORE = "before"
+PLACE_AFTER = "after"
+
+
+@dataclass(frozen=True)
+class Placement:
+    """A request to put a rule somewhere, resolved against a real script.
+
+    ``anchor`` names the existing rule that ``before`` and ``after`` are
+    relative to, and is unused by ``first`` and ``last``. Carrying the pair
+    as one value rather than as two parallel parameters is what stops a
+    caller passing an anchor with nowhere for it to apply.
+    """
+
+    where: str
+    anchor: str | None = None
 
 
 # ############################################################################
@@ -304,6 +334,99 @@ def rule_names(filters: factory.FiltersSet) -> list[str]:
 
 
 # ----------------------------------------------------------------------------
+def resolve_position(
+    names: list[str], placement: Placement | None, name: str
+) -> int:
+    """Return the index ``name`` should end up at, counting other rules only.
+
+    ``names`` is the script's rules in order, before the merge. The answer
+    is an index into that list **with the one copy of ``name`` being
+    placed taken out of it**, because the rule being placed cannot be its
+    own reference point -- for a ``--replace`` the old copy is on its way
+    out, and for a new rule it was never there.
+
+    ``placement`` of None is what every caller got before the flags existed,
+    and it keeps that behaviour exactly: a new rule is appended, and an
+    existing one stays at the index it already has.
+
+    Failing here rather than at render time is deliberate. A named anchor
+    that does not exist is almost always a typo, and quietly appending
+    instead would be the same silent-success this whole check exists to
+    remove.
+    """
+    # Exactly ONE copy comes out, because exactly one goes back in:
+    # updatefilter rewrites the FIRST rule of that name and _move_rule
+    # pops that same first one, so the list this index is measured against
+    # is the list it is inserted into. Dropping every same-named rule
+    # instead -- what a plain `!= name` filter does -- shortens that list
+    # by one per surviving duplicate, and --last then lands the rule that
+    # many slots short of the end while reporting success. It is reachable
+    # because a hand-edited script can hold two rules mxfilter reads as
+    # one name: `# rule:[Lists]` and `# rule:[Lists ]` both parse to
+    # `Lists`. Do not simplify this back to a comprehension.
+    others = list(names)
+
+    if name in others:
+        others.remove(name)
+
+    if placement is None:
+        return names.index(name) if name in names else len(others)
+
+    if placement.where == PLACE_FIRST:
+        return 0
+
+    if placement.where == PLACE_LAST:
+        return len(others)
+
+    if placement.anchor == name:
+        raise MxFilterError(
+            f"--{placement.where} {placement.anchor!r} names the rule being "
+            f"added, which has no position to be relative to. Name another "
+            f"rule, or use --first / --last."
+        )
+
+    if placement.anchor not in others:
+        known = ", ".join(names) or "(none)"
+
+        raise MxFilterError(
+            f"no rule named {placement.anchor!r} in the active script, so "
+            f"--{placement.where} has nothing to place this rule against. "
+            f"Known rules: {known}"
+        )
+
+    index = others.index(placement.anchor)
+
+    return index if placement.where == PLACE_BEFORE else index + 1
+
+
+# ----------------------------------------------------------------------------
+def _move_rule(filters: factory.FiltersSet, name: str, position: int) -> None:
+    """Move ``name`` to ``position``, which counts the other rules only.
+
+    sievelib has no insert-at API: ``addfilter`` appends, and
+    ``updatefilter`` deliberately leaves a rule where it was. Its filters
+    are a plain list, though, so placement is a reorder of that list.
+
+    Pulling the entry out before putting it back is what makes ``position``
+    mean the same thing here as in :func:`resolve_position` -- after the
+    pop, the list is exactly the list the position was measured against.
+
+    That equality rests on both ends agreeing about *which* entry leaves,
+    and the agreement is that it is the **first** of that name: the one
+    ``updatefilter`` rewrites, the one popped below, and the one
+    :func:`resolve_position` leaves out. A script with a duplicated name
+    is where the three could disagree, and where they once did.
+    """
+    entries = filters.filters
+
+    for index, entry in enumerate(entries):
+        if entry["name"] == name:
+            entries.insert(position, entries.pop(index))
+
+            return
+
+
+# ----------------------------------------------------------------------------
 def merge_rule(
     existing: str,
     name: str,
@@ -311,26 +434,43 @@ def merge_rule(
     actions: list[tuple],
     matchtype: str = "anyof",
     replace: bool = False,
+    placement: Placement | None = None,
 ) -> str:
     """Merge one rule into an existing script and return the new source.
 
     The script is parsed and re-rendered rather than appended to, so the
     ``require`` line stays correct for the union of all rules. Every rule
-    already present is carried through untouched.
+    already present is carried through untouched, and in its original order
+    -- the only rule that moves is the one being placed.
+
+    ``placement`` and ``replace`` interact in the one way that is not
+    obvious: replacing a rule **with** a placement flag *moves* it, and
+    replacing it **without** one leaves it exactly where it was. An
+    explicit placement is an instruction, so honouring it for a new rule and
+    ignoring it for an existing one would be a command that reports success
+    and changes nothing -- which is the failure mode this argument was added
+    to remove, not one to reintroduce at a different address.
     """
     filters = parse_script(existing)
+    exists = filters.filter_exists(name)
 
-    if filters.filter_exists(name):
-        if not replace:
-            raise MxFilterError(
-                f"a rule named {name!r} already exists in the active script. "
-                f"Use --replace to overwrite it, or --name to pick another."
-            )
+    if exists and not replace:
+        raise MxFilterError(
+            f"a rule named {name!r} already exists in the active script. "
+            f"Use --replace to overwrite it, or --name to pick another."
+        )
 
+    # Resolved against the script as it stands, before the merge changes
+    # what the names are.
+    position = resolve_position(rule_names(filters), placement, name)
+
+    if exists:
         filters.updatefilter(name, name, conditions, actions, matchtype)
 
     else:
         filters.addfilter(name, conditions, actions, matchtype)
+
+    _move_rule(filters, name, position)
 
     return render_script(filters)
 

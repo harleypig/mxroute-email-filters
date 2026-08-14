@@ -25,14 +25,20 @@ from .rules import (
 )
 from .sieve import (
     MXROUTE_FORBIDDEN_ACTIONS,
+    PLACE_AFTER,
+    PLACE_BEFORE,
+    PLACE_FIRST,
+    PLACE_LAST,
     REPORTABLE_EXTENSIONS,
     UNIMPLEMENTED_ACTIONS,
+    Placement,
     SieveSession,
     backup_script,
     merge_rule,
     parse_script,
     remove_rule,
     resolve_backup_target,
+    resolve_position,
     rule_names,
     script_diff,
     write_backup,
@@ -200,6 +206,30 @@ def criteria_from_args(args) -> Criteria:
         criteria.add(name, value)
 
     return criteria
+
+
+# ----------------------------------------------------------------------------
+def placement_from_args(args) -> Placement | None:
+    """Fold the four placement flags into one value, or None if none given.
+
+    argparse has already refused more than one of them, so the order of the
+    branches only decides which attribute is read first, never which flag
+    wins. None means no flag was given, which ``resolve_position`` reads as
+    "append a new rule, leave an existing one alone".
+    """
+    if getattr(args, "place_first", False):
+        return Placement(PLACE_FIRST)
+
+    elif getattr(args, "place_last", False):
+        return Placement(PLACE_LAST)
+
+    elif getattr(args, "place_before", None):
+        return Placement(PLACE_BEFORE, args.place_before)
+
+    elif getattr(args, "place_after", None):
+        return Placement(PLACE_AFTER, args.place_after)
+
+    return None
 
 
 # ----------------------------------------------------------------------------
@@ -766,20 +796,48 @@ def cmd_rules(args) -> int:
 
 
 # ----------------------------------------------------------------------------
-def warn_about_placement(before: str, name: str, criteria, actions) -> None:
+def warn_about_placement(
+    before: str,
+    name: str,
+    criteria,
+    actions,
+    placement: Placement | None = None,
+) -> None:
     """Warn when a rule about to be added would be dead, or would starve.
 
-    Appending is what ``add`` does, so only the first direction can fire
-    today -- but the check is written for both, because the placement flags
-    that make the second reachable are the other half of this same work.
+    The analysis is run at the position the rule will actually occupy, not
+    at the end of the script. That distinction is the whole point once
+    ``--first`` and ``--before`` exist: inserting ahead of rules that
+    already work is precisely the case that starves them, and analysing an
+    append would report nothing at all.
+
+    A rule of the same name is dropped from the comparison set first. With
+    ``--replace`` the old copy is being overwritten, so leaving it in would
+    have the new rule shadowed by the version it replaces -- and would put
+    the indexes out by one, since ``resolve_position`` counts the other
+    rules only.
     """
-    rules = read_rules(parse_script(before))
+    present = read_rules(parse_script(before))
+    rules = [entry for entry in present if entry.name != name]
 
     stops = any(action[0] == "stop" for action in actions)
     action_names = tuple(action[0] for action in actions)
 
     candidate = rule_from_criteria(name, criteria, action_names, stops=stops)
-    analysis = analyze_placement(rules, candidate)
+
+    # Resolved against every name in the script, including the one being
+    # replaced -- that is how "no flag, so leave it where it is" finds
+    # where it currently is. The index it returns counts the other rules,
+    # which is the list handed to the analysis.
+    #
+    # NOT rule_from_criteria's index=-1 default: analyze_placement clamps
+    # with max(0, at_index), so a -1 here would mean the FRONT of the
+    # script rather than the end of it.
+    at_index = resolve_position(
+        [entry.name for entry in present], placement, name
+    )
+
+    analysis = analyze_placement(rules, candidate, at_index=at_index)
 
     print_findings(analysis.dead_on_arrival, "\nBefore this rule is reached:")
     print_findings(analysis.starves, "\nThis rule would come before:")
@@ -980,6 +1038,7 @@ def run_add(config, args, criteria: Criteria) -> int:
 
         name = args.name or default_rule_name(criteria)
         script_name, before = fetch_active(sieve, args)
+        placement = placement_from_args(args)
 
         after = merge_rule(
             before,
@@ -988,6 +1047,7 @@ def run_add(config, args, criteria: Criteria) -> int:
             actions,
             matchtype=criteria.sieve_matchtype(),
             replace=args.replace,
+            placement=placement,
         )
 
         print(f"\nRule {name!r} on script {script_name!r}:")
@@ -997,7 +1057,7 @@ def run_add(config, args, criteria: Criteria) -> int:
         # Read the rules that are already there before showing the diff. A
         # diff shows what changes; it cannot show that the change lands
         # after a rule whose stop means it will never be reached.
-        warn_about_placement(before, name, criteria, actions)
+        warn_about_placement(before, name, criteria, actions, placement)
 
         diff = script_diff(before, after, script_name)
 
@@ -1603,6 +1663,38 @@ def _add_rule_flags(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--delimiter",
         help="folder delimiter to assume when --no-imap is used",
+    )
+
+    # Sieve runs rules in order and 'stop' ends the run, so where a rule
+    # goes decides whether it fires at all. Mutually exclusive because the
+    # four are four answers to one question; giving none of them keeps the
+    # behaviour every earlier version had.
+    where = group.add_mutually_exclusive_group()
+    where.add_argument(
+        "--first",
+        dest="place_first",
+        action="store_true",
+        help="put the rule before every existing rule",
+    )
+    where.add_argument(
+        "--last",
+        dest="place_last",
+        action="store_true",
+        help="put the rule after every existing rule (the default). With "
+        "--replace this MOVES an existing rule to the end; without it, "
+        "the rule is simply appended as always",
+    )
+    where.add_argument(
+        "--before",
+        dest="place_before",
+        metavar="NAME",
+        help="put the rule immediately before the rule named NAME",
+    )
+    where.add_argument(
+        "--after",
+        dest="place_after",
+        metavar="NAME",
+        help="put the rule immediately after the rule named NAME",
     )
 
 

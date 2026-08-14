@@ -14,6 +14,11 @@ from mxfilter import MxFilterError
 from mxfilter import sieve as sieve_module
 from mxfilter.criteria import Criteria, escape_sieve_string
 from mxfilter.sieve import (
+    PLACE_AFTER,
+    PLACE_BEFORE,
+    PLACE_FIRST,
+    PLACE_LAST,
+    Placement,
     backup_script,
     merge_rule,
     parse_script,
@@ -528,6 +533,427 @@ def test_replace_updates_the_named_rule_and_leaves_the_others(reparse):
     assert 'fileinto "INBOX.Keeper";' in merged
     assert 'fileinto "INBOX.New";' in merged
     assert 'fileinto "INBOX.Old";' not in merged
+
+
+# ############################################################################
+# Placement
+# ############################################################################
+
+
+# ----------------------------------------------------------------------------
+def three_rules() -> str:
+    """Return a script holding 'one', 'two', 'three', in that order."""
+    script = merge_simple("", "one", "INBOX.One")
+    script = merge_simple(script, "two", "INBOX.Two")
+
+    return merge_simple(script, "three", "INBOX.Three")
+
+
+# ----------------------------------------------------------------------------
+def test_no_placement_flag_still_appends(reparse):
+    """The default is unchanged, and that is the point of pinning it.
+
+    Every mxfilter version before the placement flags appended, and the
+    flags were added to make position sayable rather than to change what
+    happens when nobody says anything. A default that quietly moved would
+    reorder scripts on accounts whose owner never asked for any of this.
+    """
+    merged = merge_simple(three_rules(), "new", "INBOX.New")
+
+    reparse(merged)
+
+    assert rule_names(parse_script(merged)) == ["one", "two", "three", "new"]
+
+
+# ----------------------------------------------------------------------------
+def test_first_puts_the_rule_ahead_of_everything(reparse):
+    """``--first`` is the flag with teeth: it can starve working rules.
+
+    Order is read back out of the rendered script rather than off the
+    filter set, because what the server runs is the text -- a reorder that
+    only happened in memory would pass an internals check and change
+    nothing about the mail.
+    """
+    merged = merge_simple(
+        three_rules(), "new", "INBOX.New", placement=Placement(PLACE_FIRST)
+    )
+
+    reparse(merged)
+
+    assert rule_names(parse_script(merged)) == ["new", "one", "two", "three"]
+
+
+# ----------------------------------------------------------------------------
+def test_last_is_spelled_out_and_appends(reparse):
+    """``--last`` says explicitly what omitting every flag does implicitly.
+
+    It earns its place by being sayable -- and, under ``--replace``, by
+    being the only way to move a rule to the end (see the replace tests
+    below).
+    """
+    merged = merge_simple(
+        three_rules(), "new", "INBOX.New", placement=Placement(PLACE_LAST)
+    )
+
+    reparse(merged)
+
+    assert rule_names(parse_script(merged)) == ["one", "two", "three", "new"]
+
+
+# ----------------------------------------------------------------------------
+def test_before_lands_immediately_ahead_of_the_named_rule(reparse):
+    """Immediately before, not merely somewhere earlier.
+
+    Sieve stops at the first rule that matches and says ``stop``, so "ahead
+    of 'two'" and "ahead of 'three'" are different filings for any message
+    both rules match.
+    """
+    merged = merge_simple(
+        three_rules(),
+        "new",
+        "INBOX.New",
+        placement=Placement(PLACE_BEFORE, "two"),
+    )
+
+    reparse(merged)
+
+    assert rule_names(parse_script(merged)) == ["one", "new", "two", "three"]
+
+
+# ----------------------------------------------------------------------------
+def test_after_lands_immediately_behind_the_named_rule(reparse):
+    """The mirror of ``--before``, including at the end of the script."""
+    merged = merge_simple(
+        three_rules(),
+        "new",
+        "INBOX.New",
+        placement=Placement(PLACE_AFTER, "three"),
+    )
+
+    reparse(merged)
+
+    assert rule_names(parse_script(merged)) == ["one", "two", "three", "new"]
+
+
+# ----------------------------------------------------------------------------
+def test_placement_into_an_empty_script_works():
+    """A first rule has nothing to be relative to, and that is not an error.
+
+    An empty script is the ordinary starting state (``parse_script`` treats
+    it as one), so a user who always passes ``--first`` out of habit must
+    not be stopped on the run that creates the script.
+    """
+    for placement in (Placement(PLACE_FIRST), Placement(PLACE_LAST)):
+        merged = merge_simple("", "only", "INBOX.Only", placement=placement)
+
+        assert rule_names(parse_script(merged)) == ["only"]
+
+
+# ----------------------------------------------------------------------------
+@pytest.mark.parametrize("where", [PLACE_BEFORE, PLACE_AFTER])
+def test_an_unknown_anchor_is_refused_and_the_known_names_listed(where):
+    """A mistyped anchor is a typo, and appending anyway would hide it.
+
+    The message lists what the script does contain, because the whole
+    reason to name an anchor is that the user is holding a mental model of
+    the script -- and a mismatch means that model is wrong somewhere.
+    """
+    with pytest.raises(MxFilterError) as raised:
+        merge_simple(
+            three_rules(),
+            "new",
+            "INBOX.New",
+            placement=Placement(where, "typo"),
+        )
+
+    message = str(raised.value)
+
+    assert "'typo'" in message
+    assert f"--{where}" in message
+    assert "one, two, three" in message
+
+
+# ----------------------------------------------------------------------------
+@pytest.mark.parametrize("where", [PLACE_BEFORE, PLACE_AFTER])
+def test_a_rule_cannot_be_placed_relative_to_itself(where):
+    """``--before`` naming the rule being added has no coherent meaning.
+
+    Resolving it would need the rule's position to already exist in order
+    to work out its position, and the realistic cause is a user who meant
+    to name a different rule.
+    """
+    with pytest.raises(MxFilterError, match="names the rule being added"):
+        merge_simple(
+            three_rules(),
+            "two",
+            "INBOX.New",
+            replace=True,
+            placement=Placement(where, "two"),
+        )
+
+
+# ----------------------------------------------------------------------------
+def test_replace_without_a_placement_flag_leaves_the_rule_where_it_was():
+    """The behaviour ``sievelib.updatefilter`` was chosen for.
+
+    Updating a rule in place is what keeps a ``--replace`` from silently
+    refiling mail that two rules both match, so no-flag replace must not
+    become a remove-and-append.
+    """
+    merged = merge_simple(three_rules(), "two", "INBOX.Changed", replace=True)
+
+    assert rule_names(parse_script(merged)) == ["one", "two", "three"]
+    assert 'fileinto "INBOX.Changed";' in merged
+
+
+# ----------------------------------------------------------------------------
+def test_replace_with_a_placement_flag_moves_the_rule(reparse):
+    """An explicit placement is an instruction, even on an existing rule.
+
+    Honouring it for a new rule and ignoring it for a replacement would be
+    a command that reports success and changes nothing -- the exact
+    silent-success failure the placement work exists to remove, so it must
+    not be reintroduced here.
+    """
+    merged = merge_simple(
+        three_rules(),
+        "three",
+        "INBOX.Changed",
+        replace=True,
+        placement=Placement(PLACE_FIRST),
+    )
+
+    reparse(merged)
+
+    assert rule_names(parse_script(merged)) == ["three", "one", "two"]
+    assert 'fileinto "INBOX.Changed";' in merged
+
+
+# ----------------------------------------------------------------------------
+def test_replace_last_moves_the_rule_to_the_end(reparse):
+    """``--last`` is a placement, not a synonym for saying nothing.
+
+    Omitting every flag means "leave an existing rule alone"; saying
+    ``--last`` means "put it at the end". They coincide for a new rule,
+    which is the common case, and they must not coincide here -- otherwise
+    there is no way to demote a rule at all.
+    """
+    merged = merge_simple(
+        three_rules(),
+        "one",
+        "INBOX.Changed",
+        replace=True,
+        placement=Placement(PLACE_LAST),
+    )
+
+    reparse(merged)
+
+    assert rule_names(parse_script(merged)) == ["two", "three", "one"]
+
+
+# ----------------------------------------------------------------------------
+def test_reordering_keeps_every_pre_existing_rule_verbatim(
+    roundcube_script, reparse
+):
+    """ADR 0002's invariant, against the newest way to break it.
+
+    A reorder rewrites the list the rules live in, which is a fresh chance
+    to drop one of the hand-made rules the user wrote in Roundcube. The
+    check is the same as the merge guard's -- bodies, actions, names -- plus
+    the one thing only a reorder can get wrong: the *relative* order of the
+    rules that were not asked to move.
+    """
+    merged = merge_simple(
+        roundcube_script,
+        "new-rule",
+        "INBOX.New",
+        placement=Placement(PLACE_FIRST),
+    )
+
+    reparse(merged)
+
+    assert rule_names(parse_script(merged)) == [
+        "new-rule",
+        "keep-boss",
+        "bin-the-noise",
+    ]
+
+    assert 'header :contains "from" "boss@example.com"' in merged
+    assert 'header :contains "subject" "newsletter"' in merged
+    assert 'fileinto "INBOX.Boss";' in merged
+    assert 'setflag "\\\\Flagged";' in merged
+    assert 'fileinto "INBOX.Noise";' in merged
+
+
+# ############################################################################
+# Placement against a duplicated name
+# ############################################################################
+#
+# `resolve_position` answers with an index into the script *minus the copy
+# being replaced*, and `_move_rule` pops exactly one entry. When a name
+# appears more than once those two lists have to stay the same length, and
+# the count of duplicates is what the arithmetic is measured in -- so two
+# copies is not the general case, it is the smallest one.
+
+
+# ----------------------------------------------------------------------------
+def duplicated_script(copies: int) -> str:
+    """Return a script whose name ``Dup`` appears ``copies`` times.
+
+    Every marker is spelled differently and every one parses to ``Dup``:
+    the marker pattern tolerates any run of whitespace after the ``#``,
+    and trailing space inside the brackets is stripped off the name. So a
+    user editing the panel's own output can produce these by hand -- which
+    is why placement has to survive them rather than assume them away.
+
+    ``Mid`` and ``Tail`` are the distinct rules an anchor can be named on.
+    From two copies up a surviving duplicate sits between them, which is
+    what makes anchoring on ``Tail`` resolve correctly only if that
+    duplicate was counted.
+    """
+    order = ["Dup", "Mid"]
+
+    if copies >= 2:
+        order.append("Dup")
+
+    order.append("Tail")
+    order += ["Dup"] * max(0, copies - 2)
+
+    blocks = ['require ["fileinto"];']
+    seen = 0
+
+    for position, name in enumerate(order):
+        if name == "Dup":
+            seen += 1
+            marker = f"#{' ' * seen}rule:[Dup{' ' * (seen - 1)}]"
+            folder = f"INBOX.Dup{seen}"
+
+        else:
+            marker = f"# rule:[{name}]"
+            folder = f"INBOX.{name}"
+
+        blocks.append(
+            f'{marker}\nif header :contains "to" "{position}@example.com"\n'
+            f'{{\n\tfileinto "{folder}";\n\tstop;\n}}'
+        )
+
+    return "\n".join(blocks) + "\n"
+
+
+# ----------------------------------------------------------------------------
+def filed_folders(text: str) -> list[str]:
+    """Return the folders the rendered script files into, in rule order.
+
+    ``rule_names`` cannot answer "which copy moved" when three rules read
+    as one name, so the folder is what identifies them. It is also what
+    the server actually acts on.
+    """
+    return [
+        line.strip()[len('fileinto "') : -len('";')]
+        for line in text.splitlines()
+        if line.strip().startswith("fileinto ")
+    ]
+
+
+# ----------------------------------------------------------------------------
+def test_three_markers_can_parse_to_one_rule_name():
+    """The premise of everything below, pinned rather than assumed.
+
+    If sievelib ever stopped folding these three spellings together the
+    tests after this one would keep passing while testing nothing, because
+    a script with three distinct names exercises none of the arithmetic.
+    """
+    assert rule_names(parse_script(duplicated_script(3))) == [
+        "Dup",
+        "Mid",
+        "Dup",
+        "Tail",
+        "Dup",
+    ]
+
+
+# ----------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("placement", "expected"),
+    [
+        # No flag: the replaced copy is the first one, and it stays where
+        # it was -- a duplicate elsewhere in the script is not a reason to
+        # shuffle a rule the user only asked to edit.
+        (None, "Changed Mid Dup2 Tail Dup3"),
+        (Placement(PLACE_FIRST), "Changed Mid Dup2 Tail Dup3"),
+        # The regression: behind BOTH surviving duplicates, not one slot
+        # short per copy.
+        (Placement(PLACE_LAST), "Mid Dup2 Tail Dup3 Changed"),
+        (Placement(PLACE_BEFORE, "Mid"), "Changed Mid Dup2 Tail Dup3"),
+        (Placement(PLACE_AFTER, "Mid"), "Mid Changed Dup2 Tail Dup3"),
+        # These two anchor across a surviving duplicate, so "immediately"
+        # is only true if that duplicate was counted.
+        (Placement(PLACE_BEFORE, "Tail"), "Mid Dup2 Changed Tail Dup3"),
+        (Placement(PLACE_AFTER, "Tail"), "Mid Dup2 Tail Changed Dup3"),
+    ],
+)
+def test_every_flag_places_correctly_among_three_same_named_rules(
+    placement, expected, reparse
+):
+    """Every flag, against the shape that breaks a two-rule fix.
+
+    The full order is asserted, not just where the moved rule ended up,
+    because the two ways to be wrong here look nothing alike: a miscount
+    files the rule short of where it was asked for, and a mismatch between
+    the resolver's list and the reorder's list loses or duplicates a rule
+    outright (ADR 0002).
+
+    The folders identify the copies -- all three rules read as ``Dup``, so
+    an order assertion on the names could not tell which one moved, or
+    notice if the wrong one had been rewritten.
+    """
+    merged = merge_simple(
+        duplicated_script(3),
+        "Dup",
+        "INBOX.Changed",
+        replace=True,
+        placement=placement,
+    )
+
+    reparse(merged)
+
+    assert filed_folders(merged) == [
+        f"INBOX.{name}" for name in expected.split()
+    ]
+
+
+# ----------------------------------------------------------------------------
+@pytest.mark.parametrize("copies", [1, 2, 3, 4, 5])
+def test_last_stays_last_however_many_copies_of_the_name_there_are(
+    copies, reparse
+):
+    """``--last`` means last, and the duplicate count must not enter into it.
+
+    The defect this pins was arithmetic: the resolver measured its index
+    against a list with *every* same-named rule removed while the reorder
+    removed one, so the rule landed one slot short of the end per surviving
+    duplicate. One copy hid it entirely and two made it look like an
+    off-by-one, so the count is swept.
+
+    It matters because these rules carry ``stop``. Demoting a broad rule so
+    a narrow one can run is the whole reason to reach for ``--last``, and
+    landing in front of a copy of itself leaves the narrow rule still
+    starved -- with a success message.
+    """
+    merged = merge_simple(
+        duplicated_script(copies),
+        "Dup",
+        "INBOX.Changed",
+        replace=True,
+        placement=Placement(PLACE_LAST),
+    )
+
+    reparse(merged)
+
+    folders = filed_folders(merged)
+
+    assert folders[-1] == "INBOX.Changed"
+    assert len(folders) == copies + 2
 
 
 # ############################################################################
