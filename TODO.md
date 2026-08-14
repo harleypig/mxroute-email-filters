@@ -21,9 +21,15 @@
 
 ## Tooling
 
-- [ ] Wire `pyright` (`pyright.md`) and a CI workflow once there is a suite to
-  run. Both are marked **Planned** in the QA status table, and CI is the
-  precondition for revisiting the merge sentinels
+- [ ] Wire `pyright` (`pyright.md`). Still **Planned** in the QA status
+  table; the workflow it would slot into now exists, so this is a job to
+  add rather than a pipeline to build.
+- [ ] Require the `Lint` and `Test` status checks in the `master` ruleset.
+  The workflow lands with this PR, so those contexts do not exist until it
+  has run once — requiring them any earlier makes every PR unmergeable,
+  blocked on checks that never report. Add them after the first green run;
+  until then the branch protection is procedural rather than enforcing.
+  This is also the precondition for revisiting the merge sentinels
   ([`.claude/CONVENTIONS.md`](.claude/CONVENTIONS.md) › *Merge policy*).
 
 ## Features & fixes
