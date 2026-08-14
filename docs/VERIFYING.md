@@ -286,7 +286,13 @@ means the criteria were broader than you thought.
 
 **You should see:**
 
-* `Created IMAP folder 'INBOX.Scratch'` (spelled per your server's delimiter).
+* `Created IMAP folder 'INBOX.Scratch' and subscribed to it` (spelled per
+  your server's delimiter). Subscribing is the half that makes the folder
+  appear in webmail: a folder that was created but not subscribed to
+  receives mail and stays invisible. If instead you see a warning that
+  subscribing failed, the folder is still real and mail will still arrive
+  there — subscribe to it in your mail client (Roundcube: Settings ›
+  Folders).
 * `Criteria: Subject contains 'Your invoice for March'`.
 * `Searching 'INBOX' for existing matches...` then `N message(s) match:` and
   the preview.
@@ -294,9 +300,11 @@ means the criteria were broader than you thought.
   Answer `y`.
 * `Moved N message(s) from 'INBOX' to 'INBOX.Scratch'`.
 
-**Verify in your mail client:** the scratch folder holds exactly those N
-messages, your INBOX is down by exactly N, and the messages themselves are
-intact — open one and check the body is there, not just the headers.
+**Verify in your mail client:** the scratch folder is *listed at all* — a
+folder you cannot see is the failure this step is really checking for — it
+holds exactly those N messages, your INBOX is down by exactly N, and the
+messages themselves are intact: open one and check the body is there, not
+just the headers.
 
 **To reverse it**, move them back from your mail client, or:
 

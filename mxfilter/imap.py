@@ -17,6 +17,14 @@ The same trap applies to the spam folder, which on MXRoute is
 ``INBOX.spam`` in lower case. Filing into ``Junk`` would silently create a
 second folder next to the real one, so folder names are matched against the
 server's own list (case-insensitively) rather than taken on trust.
+
+Existing and visible are also two different questions, which is why both
+folder views are cached. ``LIST`` reports what the account has; ``LSUB``
+reports what the user subscribed to, and a webmail client -- Roundcube
+included -- draws its folder tree from ``LSUB``. A folder that was created
+but never subscribed therefore exists, receives mail, and is invisible in
+webmail: the same failure as filing into the wrong folder, arrived at from
+the other direction.
 """
 
 import contextlib
@@ -35,6 +43,7 @@ from .config import Config
 from .criteria import Criteria
 
 __all__ = [
+    "FolderCreation",
     "ImapSession",
     "MailActionPlan",
     "MailActionResult",
@@ -105,6 +114,26 @@ def normalize_folder(
         return delimiter.join(["INBOX", *components])
 
     return candidate
+
+
+@dataclass(frozen=True)
+class FolderCreation:
+    """What creating a folder actually achieved.
+
+    Creating and subscribing are two IMAP operations, so they can disagree:
+    the folder can exist while the subscription that makes it visible does
+    not. Reporting them as one boolean would lose exactly the case this
+    record exists for, so the outcome is returned rather than reduced to
+    "it worked".
+
+    ``subscribed`` false with an empty ``subscribe_error`` means the caller
+    declined to subscribe; with an error it means the attempt failed. The
+    folder exists either way -- mail filed there will arrive.
+    """
+
+    folder: str
+    subscribed: bool
+    subscribe_error: str = ""
 
 
 # ############################################################################
@@ -241,6 +270,7 @@ class ImapSession:
         self.client: IMAPClient | None = None
         self._delimiter = "."
         self._folders: list[str] = []
+        self._subscribed: list[str] = []
 
     # ------------------------------------------------------------------------
     def __enter__(self) -> "ImapSession":
@@ -310,7 +340,8 @@ class ImapSession:
         self._read_folders()
         self._log(
             f"connected; delimiter {self._delimiter!r}, "
-            f"{len(self._folders)} folders"
+            f"{len(self._folders)} folders, "
+            f"{len(self._subscribed)} subscribed"
         )
 
     # ------------------------------------------------------------------------
@@ -334,7 +365,18 @@ class ImapSession:
 
     # ------------------------------------------------------------------------
     def _read_folders(self) -> None:
-        """Cache the folder list and the hierarchy delimiter."""
+        """Cache both folder views, plus the hierarchy delimiter.
+
+        LIST and LSUB answer different questions -- what exists, and what a
+        client will draw -- and the second one is not derivable from the
+        first. Reading only LIST is what let a created-but-unsubscribed
+        folder look present to this tool while being invisible in webmail.
+
+        An LSUB failure is raised rather than shrugged off, because an
+        empty subscription list is indistinguishable from "nothing is
+        subscribed": the tool would then report the very condition it is
+        supposed to detect, confidently and wrongly.
+        """
         client = self._require_client()
 
         try:
@@ -343,21 +385,38 @@ class ImapSession:
         except IMAPClientError as exc:
             raise MxFilterError(f"LIST failed -- {exc}") from exc
 
-        folders = []
+        try:
+            subscribed = client.list_sub_folders()
 
-        for _flags, delimiter, name in listing:
-            if delimiter:
-                self._delimiter = (
-                    delimiter.decode()
-                    if isinstance(delimiter, bytes)
-                    else str(delimiter)
+        except IMAPClientError as exc:
+            raise MxFilterError(f"LSUB failed -- {exc}") from exc
+
+        self._folders, delimiter = self._decode_listing(listing)
+        self._subscribed, _ = self._decode_listing(subscribed)
+
+        if delimiter:
+            self._delimiter = delimiter
+
+    # ------------------------------------------------------------------------
+    @staticmethod
+    def _decode_listing(listing) -> tuple[list[str], str]:
+        """Turn a LIST/LSUB response into names and the delimiter it used."""
+        folders = []
+        delimiter = ""
+
+        for _flags, separator, name in listing:
+            if separator:
+                delimiter = (
+                    separator.decode()
+                    if isinstance(separator, bytes)
+                    else str(separator)
                 )
 
             folders.append(
                 name.decode() if isinstance(name, bytes) else str(name)
             )
 
-        self._folders = folders
+        return folders, delimiter
 
     # ------------------------------------------------------------------------
     @property
@@ -370,6 +429,12 @@ class ImapSession:
     def folders(self) -> list[str]:
         """Every folder the account can see."""
         return list(self._folders)
+
+    # ------------------------------------------------------------------------
+    @property
+    def subscribed_folders(self) -> list[str]:
+        """Every folder the account is subscribed to (LSUB)."""
+        return list(self._subscribed)
 
     # ------------------------------------------------------------------------
     def capabilities(self) -> list[str]:
@@ -395,8 +460,79 @@ class ImapSession:
         )
 
     # ------------------------------------------------------------------------
-    def create_folder(self, folder: str) -> None:
-        """Create a folder and refresh the cached listing."""
+    def is_subscribed(self, folder: str) -> bool:
+        """Whether a (already normalized) folder is subscribed to.
+
+        Answered from LSUB, never from LIST: existing is what LIST reports,
+        and being drawn in a mail client is what this reports.
+        """
+        return any(
+            candidate.casefold() == folder.casefold()
+            for candidate in self._subscribed
+        )
+
+    # ------------------------------------------------------------------------
+    def subscribe(self, folder: str) -> None:
+        """Subscribe to a folder, and confirm the server agrees it took.
+
+        The confirmation is not ceremony. No server advertises whether its
+        CREATE subscribes on its own, and a SUBSCRIBE that returns OK is
+        still only the server's word for it -- so the only way to know is
+        to re-read LSUB and look. Assuming the write took is precisely the
+        mistake that shipped the invisible folder.
+        """
+        client = self._require_client()
+        self._log(f"subscribing to folder {folder!r}")
+
+        try:
+            client.subscribe_folder(folder)
+
+        except IMAPClientError as exc:
+            raise MxFilterError(
+                f"could not subscribe to folder {folder!r} -- {exc}"
+            ) from exc
+
+        self._read_folders()
+
+        if not self.is_subscribed(folder):
+            raise MxFilterError(
+                f"the server accepted SUBSCRIBE for {folder!r} but still "
+                f"does not list it as subscribed (LSUB), so mail clients "
+                f"will not show it"
+            )
+
+    # ------------------------------------------------------------------------
+    def unsubscribe(self, folder: str) -> None:
+        """Unsubscribe from a folder, hiding it from mail clients."""
+        client = self._require_client()
+        self._log(f"unsubscribing from folder {folder!r}")
+
+        try:
+            client.unsubscribe_folder(folder)
+
+        except IMAPClientError as exc:
+            raise MxFilterError(
+                f"could not unsubscribe from folder {folder!r} -- {exc}"
+            ) from exc
+
+        self._read_folders()
+
+    # ------------------------------------------------------------------------
+    def create_folder(
+        self, folder: str, subscribe: bool = True
+    ) -> FolderCreation:
+        """Create a folder, subscribe to it, and report what happened.
+
+        Subscribing is the default because a folder made to be a
+        ``fileinto`` target is by definition one the user is meant to see;
+        an unsubscribed one receives mail that never appears in webmail.
+
+        A failed subscription does **not** undo the creation and does not
+        raise: the folder exists and mail filed there will arrive, so
+        tearing it back down would trade a visibility problem for a data
+        one. The outcome is returned instead, for the caller to say out
+        loud.
+        """
         client = self._require_client()
         self._log(f"creating folder {folder!r}")
 
@@ -409,6 +545,19 @@ class ImapSession:
             ) from exc
 
         self._read_folders()
+
+        if not subscribe:
+            return FolderCreation(folder=folder, subscribed=False)
+
+        try:
+            self.subscribe(folder)
+
+        except MxFilterError as exc:
+            return FolderCreation(
+                folder=folder, subscribed=False, subscribe_error=str(exc)
+            )
+
+        return FolderCreation(folder=folder, subscribed=True)
 
     # ------------------------------------------------------------------------
     def search(

@@ -133,6 +133,17 @@ assumptions below get settled for your account.
   unless you pass `--create-folder`. `add` will still write the rule, and
   mail filed there by the server later may be lost. `apply` refuses outright,
   since it would have nowhere to put the messages.
+* `--create-folder` also **subscribes** to the folder it creates. Existing
+  and visible are different questions on IMAP: webmail draws its folder tree
+  from the subscription list (`LSUB`), not from the folder list (`LIST`), so
+  a folder that is created but never subscribed to receives mail and never
+  appears. `--no-subscribe` skips the subscription on purpose — somewhere to
+  file a high-volume list that should leave the inbox without cluttering the
+  sidebar — and mxfilter says so on the line where it creates the folder,
+  because an invisible folder nobody was told about is the bug, not the
+  feature. If the subscription fails, the folder is **not** torn back down:
+  it exists and mail filed there will arrive, so mxfilter warns and tells
+  you to subscribe to it from your mail client.
 
 ## MXRoute specifics
 

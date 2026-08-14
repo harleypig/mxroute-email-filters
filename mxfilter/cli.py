@@ -15,7 +15,12 @@ from contextlib import ExitStack
 from . import MxFilterError, __version__
 from .config import SIEVE_TLS_MODES, load_config
 from .criteria import COMPARE_OPS, MATCH_MODES, Criteria, escape_sieve_string
-from .imap import ImapSession, decode_header_value, normalize_folder
+from .imap import (
+    FolderCreation,
+    ImapSession,
+    decode_header_value,
+    normalize_folder,
+)
 from .rules import (
     CERTAIN,
     analyze_placement,
@@ -454,6 +459,26 @@ def ensure_folder(
     if has_mailbox:
         print(f"Folder {folder!r} will be created by Sieve (fileinto :create)")
 
+        if not args.no_subscribe:
+            # Sieve creates the folder at delivery time, when mxfilter is
+            # not running and cannot subscribe to it. Whether the server
+            # does so itself is genuinely unknown -- RFC 5490 says :create
+            # creates the mailbox and says nothing about subscription, and
+            # this account has never been observed doing it either way.
+            #
+            # So the wording claims only the absence of a promise, not that
+            # it will not happen. Asserting the stronger version would be
+            # inventing a fact about the server, which is the failure
+            # CONVENTIONS.md 'Confidence' exists to prevent. Issue #40 is
+            # where that gets settled; when it does, replace this line with
+            # the real behaviour rather than leaving a caution that never
+            # resolves.
+            print(
+                "  Nothing promises Sieve will subscribe to a folder it "
+                "creates, so it may not appear in webmail until you "
+                "subscribe to it there."
+            )
+
         return True
 
     if imap is None:
@@ -467,10 +492,45 @@ def ensure_folder(
 
         return False
 
-    imap.create_folder(folder)
-    print(f"Created IMAP folder {folder!r}")
+    report_folder_creation(
+        imap.create_folder(folder, subscribe=not args.no_subscribe)
+    )
 
     return False
+
+
+# ----------------------------------------------------------------------------
+def report_folder_creation(result: FolderCreation) -> None:
+    """Say what creating the folder achieved, including what it did not.
+
+    Every branch here says something. An unsubscribed folder is invisible
+    in webmail whether that was asked for or not, and the whole failure
+    being fixed is that the invisibility arrived silently -- so an opt-out
+    that printed nothing would reproduce the bug for whoever passes the
+    flag without knowing what it costs.
+    """
+    folder = result.folder
+
+    if result.subscribed:
+        print(f"Created IMAP folder {folder!r} and subscribed to it")
+
+        return
+
+    if result.subscribe_error:
+        warn(
+            f"created folder {folder!r}, but subscribing to it failed: "
+            f"{result.subscribe_error}. The folder exists and mail filed "
+            f"there will arrive, but it will not appear in webmail until "
+            f"you subscribe to it in your mail client (Roundcube: "
+            f"Settings > Folders)."
+        )
+
+        return
+
+    print(
+        f"Created IMAP folder {folder!r}; not subscribed (--no-subscribe), "
+        f"so it will not appear in webmail."
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -1132,8 +1192,9 @@ def cmd_apply(args) -> int:
                 print(f"[dry-run] would create IMAP folder {folder!r}")
 
             else:
-                imap.create_folder(folder)
-                print(f"Created IMAP folder {folder!r}")
+                report_folder_creation(
+                    imap.create_folder(folder, subscribe=not args.no_subscribe)
+                )
 
         print(f"Criteria: {criteria.describe()}")
 
@@ -1425,7 +1486,18 @@ def action_parser() -> argparse.ArgumentParser:
         "--create-folder",
         dest="create_folder",
         action="store_true",
-        help="create the target folder if it does not exist",
+        help="create the target folder if it does not exist, and subscribe "
+        "to it so mail clients show it",
+    )
+    group.add_argument(
+        "--no-subscribe",
+        dest="no_subscribe",
+        action="store_true",
+        help="with --create-folder, create the folder without subscribing "
+        "to it. Webmail draws its folder tree from the subscription list, "
+        "so the folder will receive mail and stay hidden -- which is the "
+        "point for a high-volume list you want out of the inbox and out of "
+        "the sidebar",
     )
 
     # Accepted only so the failure is a clear explanation rather than an

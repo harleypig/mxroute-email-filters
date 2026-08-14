@@ -148,7 +148,13 @@ class FakeIMAPClient:
 
     # ------------------------------------------------------------------------
     def __init__(self):
-        """Start out as an empty INBOX on a Maildir++ style server."""
+        """Start out as an empty INBOX on a Maildir++ style server.
+
+        LIST and LSUB deliberately disagree out of the box: ``INBOX.spam``
+        exists without being subscribed, which is the condition observed on
+        a real account (issue #38) and the one a double that quietly kept
+        the two in step could never reproduce.
+        """
         self.calls: list[tuple] = []
         self.connected_to: tuple | None = None
         self.starttls_called = False
@@ -157,9 +163,17 @@ class FakeIMAPClient:
             ((), b".", b"INBOX.Lists"),
             ((), b".", b"INBOX.spam"),
         ]
+        self.subscriptions = [
+            ((), b".", b"INBOX"),
+            ((), b".", b"INBOX.Lists"),
+        ]
         self.messages: dict[int, bytes] = {}
         self.caps = {"MOVE", "UIDPLUS"}
         self.failures: dict[str, Exception] = {}
+
+        # A server that answers OK to SUBSCRIBE and does not act on it.
+        # Nothing advertises this, so the only defence is re-reading LSUB.
+        self.subscribe_takes_effect = True
 
     # ------------------------------------------------------------------------
     def _maybe_fail(self, name: str) -> None:
@@ -187,6 +201,31 @@ class FakeIMAPClient:
         self._maybe_fail("list_folders")
 
         return self.listing
+
+    # ------------------------------------------------------------------------
+    def list_sub_folders(self):
+        self._maybe_fail("list_sub_folders")
+
+        return self.subscriptions
+
+    # ------------------------------------------------------------------------
+    def subscribe_folder(self, folder: str) -> None:
+        self._maybe_fail("subscribe_folder")
+        self.calls.append(("subscribe_folder", folder))
+
+        if self.subscribe_takes_effect:
+            self.subscriptions.append(((), b".", folder.encode()))
+
+    # ------------------------------------------------------------------------
+    def unsubscribe_folder(self, folder: str) -> None:
+        self._maybe_fail("unsubscribe_folder")
+        self.calls.append(("unsubscribe_folder", folder))
+
+        self.subscriptions = [
+            entry
+            for entry in self.subscriptions
+            if entry[2] != folder.encode()
+        ]
 
     # ------------------------------------------------------------------------
     def capabilities(self):
