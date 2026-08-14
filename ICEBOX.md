@@ -1,7 +1,7 @@
 # Icebox
 
 Deferred "not now / maybe-someday" work — revisited **only on the trigger
-noted**, not on the general [`TODO.md`](TODO.md) cadence. Per the maintainer's
+noted**, not on the general issue-triage cadence. Per the maintainer's
 `code-style.md` (the `ICEBOX:` convention) and `todo.md` (deferred work is not
 a TODO item). Each entry carries an `ICEBOX:` tag so a
 `grep -rn "ICEBOX:"` scan for prior deferred decisions surfaces it.
