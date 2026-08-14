@@ -281,7 +281,7 @@ Full dimension status:
 | 12. Build | **N/A** — pure Python, no build step (`setuptools` metadata only) |
 | 13. Documentation | **Active** — this file, `README.md`, and `adr/`; markdownlint gates the prose |
 | 14. Code review | **Informal** — solo repo; `master` is PR-only, 0 required reviewers |
-| 15. CI | **Planned** — no workflow exists yet; wire it once there is a test suite to run ([TODO][todo]) |
+| 15. CI | **Active** — `.github/workflows/test.yml` runs `ruff check`, `ruff format --check`, and `pytest` on every PR and on pushes to `master`. The live tier is deliberately excluded — it needs real credentials |
 
 ## Merge policy & versioning
 

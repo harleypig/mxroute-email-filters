@@ -1,0 +1,59 @@
+# mxfilter testing workflow.
+name: Tests
+
+# Runs on every pull request and on pushes to the default branch. The
+# branch ruleset requires a PR, so the push trigger only ever fires for a
+# merge -- it is what keeps the default branch's own status honest.
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+# Testing only needs to read the repository contents.
+permissions:
+  contents: read
+
+# A new push to a PR makes the previous run's answer irrelevant, so stop
+# it rather than paying for both.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Style and static analysis. Split from the tests so a red check names
+  # which of the two failed without opening the log.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - name: Lint
+        run: ruff check .
+      # --check, never a rewrite: CI gates, it does not mutate. The
+      # matching fixer is .pre-commit-config-fix.yaml, run locally.
+      - name: Format check
+        run: ruff format --check .
+
+  # The offline unit tier. The live tier (tests/live/) is gated behind
+  # MXFILTER_LIVE and is deliberately NOT run here -- it needs credentials
+  # for a real MXRoute account, and CI is the last place those belong.
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - name: Test
+        run: pytest -q
