@@ -192,6 +192,33 @@ difference from the silent flattening that Jsonnet-as-input causes.
 **stdin** as well as from a file, so layer 2 is possible from day one. Nothing
 else about the decision needs settling up front.
 
+### The acceptance case is already reserved
+
+The live account has three rules that differ only by key and share an action —
+`to :contains <address>` → `fileinto "Trash"; stop`, for Herrschners, Rumble,
+and an Arch list. They are **deliberately left unmerged**, held as the
+real-data acceptance case for this work (see [#21][i21], which would otherwise
+propose merging them tomorrow).
+
+They earn that role because **they force the round-trip test to be about
+behaviour rather than bytes.** The naive test — assert `import → emit`
+reproduces the input — passes trivially on a rule set nothing transforms, and
+would *fail* here, since three rules correctly come back as one with a
+three-key list. So the assertion has to be *"the emitted script sorts the same
+mail to the same places"*, which is both harder and the only version that
+actually tests the safety claim.
+
+That matters because it is the same claim the **replace only what you
+imported** invariant rests on. Merging makes the output deliberately not
+byte-identical to the input, so byte-equality cannot be the safety argument —
+behavioural equivalence has to be, and this case demands it up front rather
+than leaving it to be discovered when someone's byte comparison goes red.
+
+It is format-agnostic: it tests the round trip whichever way the YAML/Jsonnet
+question above lands.
+
+[i21]: https://github.com/harleypig/mxroute-email-filters/issues/21
+
 Prior art for the Sieve half exists
 too — [Transiever.SieveRuler][sieveruler] builds Sieve from provider-neutral
 JSON rule documents and *reconciles* them against the deployed script rather
