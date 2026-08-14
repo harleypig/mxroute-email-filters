@@ -120,6 +120,30 @@ ENHANCEMENTS:
 
 BUG FIXES:
 
+* **A folder mxfilter created was not subscribed, so webmail could not see
+  it.** IMAP subscription is a separate operation from `CREATE`, and
+  Roundcube renders `LSUB` rather than `LIST` — so `--create-folder` made a
+  folder that existed, received mail, and was invisible in the client the
+  user actually opens. Nothing was lost, which is worse than an error: the
+  command printed success and the mail was simply somewhere nobody looks.
+
+  `--create-folder` now subscribes, and verifies it by re-reading the
+  subscription list rather than trusting the server's OK. **`--no-subscribe`
+  declines**, for the real case of a folder that should take mail out of the
+  inbox without appearing in the sidebar — and it says so at the time, since
+  a silent opt-out would reproduce the original bug for whoever finds the
+  flag in a saved command line later.
+
+  A subscribe that fails is a warning, not a failure: the folder exists and
+  mail will arrive there, so aborting would leave an invisible folder with
+  no rule and nothing filed, which is strictly worse.
+
+  **Note this does not cover the `fileinto :create` path**, which is what
+  `add --create-folder` uses whenever the server advertises the `mailbox`
+  extension — there the folder is made by the server at delivery time, and
+  whether it is subscribed is unknown. mxfilter now says so; issue #40 is
+  where it gets settled.
+
 * **The password resolution order was inverted for flags.**
   `MXROUTE_PASSWORD` beat an explicit `--password-cmd`, contradicting the
   `CLI flag > environment > config file > default` rule the rest of the
