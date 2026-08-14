@@ -31,6 +31,17 @@
 
 ## Features & fixes
 
+- [ ] **A `restore` subcommand.** `mxfilter backup` now makes the copy and
+  nothing puts it back, so the gap is conspicuous rather than merely noted
+  ([README.md](README.md) › *Safety*, [docs/VERIFYING.md](docs/VERIFYING.md) ›
+  *If something looks wrong*). It was left out of the backup change
+  deliberately: it is a **write path against a live account** — the one that
+  replaces a script wholesale rather than merging into it — so it needs its
+  own confirmation flow (show the diff between the file and what is on the
+  server, then ask), its own tests, and a decision about whether it may
+  restore over a script whose current contents mxfilter cannot parse. Until
+  then the answer is another ManageSieve client, such as `sieve-connect`.
+
 - [ ] Expand `~` in a password-file path. `password_file = "~/pw"` in
   `config.toml` currently fails with "No such file" naming the literal
   `~/pw`, which reads as a missing file rather than an unexpanded path.

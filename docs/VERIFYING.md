@@ -103,26 +103,38 @@ account. Check both:
 in webmail. Something is wrong with the account or the connection, and every
 later step depends on this list being complete.
 
-## 3. `mxfilter list` and `mxfilter show` — read-only, and save a copy
+## 3. `mxfilter list` and `mxfilter backup` — read-only, and save a copy
 
 **Do this before anything that writes.** Save the current active script:
 
 ```bash
 mxfilter list
-mxfilter show > ~/mxfilter-before-first-run.sieve
+mxfilter backup
 ```
 
 **You should see** `mxfilter list` print one line per script, with `*` and
-`(active)` marking the active one. Then check the saved file:
+`(active)` marking the active one, and then one line from `backup`:
 
-```bash
-cat ~/mxfilter-before-first-run.sieve
+```text
+wrote 3 rule(s) to /home/you/.config/mxfilter/backups/managesieve-20260814T095659Z.sieve
 ```
 
-**You should see** your existing filters as Sieve source, wrapped in two
-banner lines that `show` adds: `# ---- <name> ----` at the top and
-`# ---- N rule(s): ...` at the bottom. Those are comments, not rules — strip
-them if you ever feed this file back to a server.
+That file is the script **exactly as the server has it** — no banner lines,
+nothing reformatted, mode `0600`. It goes in `~/.config/mxfilter/backups`
+beside your `config.toml`; `--output PATH` puts it somewhere else, and a PATH
+ending in `/` (or naming a directory that exists) means "in here" while
+anything else is the exact file to write. Then read it:
+
+```bash
+cat "$(ls -t ~/.config/mxfilter/backups/*.sieve | head -1)"
+```
+
+**You should see** your existing filters as Sieve source and nothing else.
+
+**Use `backup`, not `mxfilter show > file`.** `show` wraps its output in two
+banner lines — `# ---- <name> ----` and `# ---- N rule(s): ...` — so a
+redirected `show` is a file that looks like a backup and is not one. `backup`
+exists for exactly this.
 
 **If you have filters in Roundcube, this file is them.** Roundcube's filter UI
 writes the same active script mxfilter is about to edit. This copy is what
@@ -132,8 +144,8 @@ protects them.
 
 * `mxfilter list` prints `No Sieve scripts on the server.` That is not a
   failure — it means you have no filters yet, there is nothing to lose, and
-  mxfilter will create a script called `mxfilter` on first upload. Skip the
-  `show` and carry on.
+  mxfilter will create a script called `mxfilter` on first upload. `backup`
+  will say there is nothing to back up; carry on.
 * The saved file is empty but `list` showed an active script. Do not continue;
   something is wrong with the download and you have no backup.
 
@@ -214,8 +226,9 @@ messages that arrive from now on.
    ls -l <the path it printed>
    ```
 
-   By default backups land in `~/.local/state/mxfilter/backups`, one file per
-   upload, named `<script>-<UTC timestamp>.sieve`.
+   By default backups land in `~/.config/mxfilter/backups` — the same place
+   `mxfilter backup` writes to in step 3 — one file per upload, named
+   `<script>-<UTC timestamp>.sieve`.
 
 2. The server has your rule, and still has the others:
 
@@ -329,13 +342,15 @@ Read the diff before confirming; the same merge round-trip applies.
 mxfilter printed in step 5 is the server's exact previous bytes, before that
 upload. So is the copy you saved in step 3.
 
-**mxfilter has no restore command.** It can only ever merge into whatever is
-currently on the server. To put a backup back you need another ManageSieve
-client: a command-line one such as `sieve-connect`, or Roundcube's filter UI
-if the panel exposes its raw filter-set edit or import view — whether it does
-is a server-side setting nobody has checked here. Once it is restored, run
-`mxfilter show` and compare against your saved file before doing anything
-else.
+**mxfilter has no restore command.** `mxfilter backup` makes the copy; nothing
+here puts one back. It can only ever merge into whatever is currently on the
+server. To restore you need another ManageSieve client: a command-line one
+such as `sieve-connect`, or Roundcube's filter UI if the panel exposes its raw
+filter-set edit or import view — whether it does is a server-side setting
+nobody has checked here. Once it is restored, run `mxfilter backup --output
+./after-restore.sieve` and `diff` it against the file you were putting back;
+`mxfilter show` is fine for reading, but its banner lines make it the wrong
+thing to compare.
 
 If the backup and the current script differ in ways you did not expect, that
 is worth reporting with both files in hand — they are the whole evidence of

@@ -35,6 +35,36 @@ FEATURES:
 
 ENHANCEMENTS:
 
+* **`mxfilter backup` — save the active script on demand.** Fetches the active
+  script and writes it to a file, changing nothing on the server. The file is
+  the server's **exact bytes**: no banner lines, nothing reformatted, no
+  newline translated. That distinction is the point of the command —
+  `mxfilter show` decorates its output with `# ---- name ----` and
+  `# ---- N rule(s): ...` for a reader, so redirecting `show` to a file
+  produces something that looks like a backup and cannot be restored, which is
+  what [docs/VERIFYING.md](docs/VERIFYING.md) step 3 used to tell people to
+  do. `--output PATH` overrides the location: a PATH ending in `/`, or naming
+  a directory that already exists, means "write the default filename in here";
+  anything else is the exact file to write. Written mode `0600` in a directory
+  created `0700` — a Sieve script is not a credential, but it does say who the
+  user corresponds with and how they sort it. `--dry-run` reports the file it
+  would write and writes nothing.
+* **Backups now default to the config directory** — usually
+  `~/.config/mxfilter/backups`, or `$XDG_CONFIG_HOME/mxfilter/backups` — in
+  place of `$XDG_STATE_HOME/mxfilter/backups`. XDG would call a backup *state*
+  rather than config, and this is a deliberate departure from that rather than
+  an XDG-endorsed reading: a backup the user cannot find is not a backup, and
+  the config directory is the one mxfilter path they already know, having put
+  `config.toml` in it. The automatic pre-upload backup and `mxfilter backup`
+  share the one location, so there is no second directory to look in.
+  `--backup-dir` and `MXROUTE_BACKUP_DIR` override it exactly as before. **Any
+  backups already under `~/.local/state/mxfilter/backups` stay there** —
+  nothing moves them.
+* **Still no restore command.** The file is the server's exact bytes, and
+  putting one back needs another ManageSieve client (`sieve-connect`, or a
+  panel filter UI that exposes a raw import). `backup --help` says so, and a
+  `restore` subcommand is tracked in [TODO.md](TODO.md): it is a write path
+  against a live account and deserves its own confirmation flow and tests.
 * **A password file source.** `--password-file PATH`,
   `MXROUTE_PASSWORD_FILE`, and `password_file` in the config file read the
   credential from a file, which — unlike an environment variable — can be
@@ -74,7 +104,7 @@ BUG FIXES:
 
 NOTES:
 
-* **Nothing here has run against a live MXroute account.** The 320-test suite
+* **Nothing here has run against a live MXroute account.** The 347-test suite
   is entirely offline, and the live tier (`tests/live/`) is gated behind
   `MXFILTER_LIVE` and has never been exercised.
   [docs/VERIFYING.md](docs/VERIFYING.md) is the ordered first-run procedure,

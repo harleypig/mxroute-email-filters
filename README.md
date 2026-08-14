@@ -86,6 +86,10 @@ mxfilter apply --subject '[SPAM]' --fileinto Quarantine --create-folder \
 mxfilter list
 mxfilter show
 mxfilter remove-rule from-newsletter-example-com
+
+# Save the active script, byte for byte, before you touch anything.
+mxfilter backup
+mxfilter backup --output ~/mxfilter-before-first-run.sieve
 ```
 
 **Before the first run against a real mailbox, work through
@@ -98,14 +102,22 @@ assumptions below get settled for your account.
 * `--dry-run` changes nothing, on every mutating command. It prints whatever
   that command would have changed: the Sieve diff for `add`, `from-message`,
   and `remove-rule`; the list of matching messages for `add`, `from-message`,
-  and `apply`.
+  and `apply`; the file that would have been written for `backup`.
 * The current active script is backed up to a timestamped file before any
-  upload, and the path is printed. Default location:
-  `$XDG_STATE_HOME/mxfilter/backups` (usually
-  `~/.local/state/mxfilter/backups`), one file per upload, named
-  `<script>-<UTC timestamp>.sieve`. **mxfilter has no restore command** — the
-  file is the server's exact bytes, and putting them back needs another
-  ManageSieve client. See [docs/VERIFYING.md][verify].
+  upload, and the path is printed. `mxfilter backup` takes the same copy on
+  demand, without changing anything on the server.
+* Backups land in `$XDG_CONFIG_HOME/mxfilter/backups` (usually
+  `~/.config/mxfilter/backups`) — beside your `config.toml`, one file per
+  backup, named `<script>-<UTC timestamp>.sieve`. XDG would call a backup
+  *state* rather than config; keeping it here is a deliberate departure from
+  that, not something XDG endorses, because a backup you cannot find is not a
+  backup. `--backup-dir` and `MXROUTE_BACKUP_DIR` move it. The file is written
+  mode `0600` in a directory created `0700`: a Sieve script is not a password,
+  but it does say who you correspond with and how you sort it.
+* **mxfilter has no restore command.** The backup is the server's exact bytes
+  — no banner lines, nothing reformatted — and putting them back needs another
+  ManageSieve client, such as `sieve-connect`, or the panel's filter UI if it
+  exposes a raw import. See [docs/VERIFYING.md][verify].
 * Rules are merged into the parsed existing script, never appended blindly,
   so other rules survive. If the existing script cannot be parsed, mxfilter
   stops rather than overwrite it.

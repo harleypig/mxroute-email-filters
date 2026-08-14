@@ -159,7 +159,22 @@ about MXroute's configuration** is not.
   hand-made filters. A parse failure is a **hard stop**, never a
   fall-back-to-overwrite. See [ADR 0002][adr2].
 - **Back up before every upload.** The previous script is written to the
-  backup directory before the new one is sent.
+  backup directory before the new one is sent, and `mxfilter backup` takes the
+  same copy on demand. **One location, and it is the config directory** —
+  `$XDG_CONFIG_HOME/mxfilter/backups`, beside `config.toml`
+  (`config.default_backup_dir`), overridable by `--backup-dir` /
+  `MXROUTE_BACKUP_DIR`. XDG would call a backup *state*; co-locating it with
+  the config is a deliberate departure from XDG, not an XDG-endorsed reading,
+  and the reason is that a backup the user cannot find is not a backup. Two
+  defaults for one kind of file is how somebody ends up looking in the
+  directory that does not have their backup in it.
+- **A backup is the server's exact bytes.** `sieve.write_backup` writes what
+  it was handed, with newline translation off, mode `0600` in a directory
+  created `0700`. Nothing decorates it — `mxfilter show` adds banner lines for
+  a reader and is therefore *not* a backup, which is exactly the trap
+  redirecting `show` to a file used to set. There is no restore path: putting
+  a file back needs another ManageSieve client, and building one is its own
+  change ([TODO][todo]).
 - **Show, then change.** Every mutating subcommand works out what would
   change, shows it (a diff for the script, a preview for the messages), and
   only then applies it. `--dry-run` stops after the "show it" step.
