@@ -20,3 +20,10 @@ backups/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# The operator's GLOBAL gitignore ignores `Makefile` -- reasonable there,
+# since generated autotools/cmake Makefiles are common noise. Ours is a
+# hand-written, tracked source file, and four docs tell the reader to run
+# `make test`. Un-ignore it explicitly: a repo .gitignore outranks the
+# global one, and without this line the file is silently never committed.
+!Makefile
