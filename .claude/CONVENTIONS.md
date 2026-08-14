@@ -378,6 +378,41 @@ Full dimension status:
 | 14. Code review | **Informal** — solo repo; `master` is PR-only, 0 required reviewers |
 | 15. CI | **Active** — `.github/workflows/test.yml` runs `ruff check`, `ruff format --check`, and `pytest` on every PR and on pushes to `master`. The live tier is deliberately excluded — it needs real credentials |
 
+## How work is dispatched
+
+This repo is **team-managed**. The sentinel the global
+`team-managed-delegation.md` reads:
+
+team-managed: enabled
+
+So the main-thread agent is the **Project-Manager seat**: it plans, routes,
+and integrates, and **substantive edits are dispatched to the role that owns
+them** — the Developer for package source and its tests, QA for the test
+tier, the Writer for prose, the Config Engineer for anything under `.claude/`.
+Orchestration glue stays with the main thread: planning notes, CI wiring,
+`.claude/settings*.json`, and scratch files.
+
+**Enabled deliberately, on 2026-08-14, not at scaffold time.** The rule is
+default-off and says an agent must not self-enable it; the operator asked
+for it after watching a module and its whole test suite get authored on the
+main thread. Recording the date matters because the norm is what makes
+*"since the role last touched these files"* a meaningful boundary, and before
+this date there is no such boundary to compute.
+
+The nudge is a `PreToolUse` hook, and it is **advisory by construction** — it
+injects a reminder and allows the edit. Two consequences worth having
+written down rather than rediscovered:
+
+- **An explicit instruction outranks it.** If the operator says to edit
+  directly, or subagents are unavailable, edit directly — hold the change to
+  the **owning role's standard** and say which role's standard you applied.
+  Acknowledge the reminder once per session, not per edit.
+- **Standing in for a role is not the same as the role having seen it.** Work
+  the main thread authored directly should be handed back for that role's
+  review once delegation is available again. The mechanism for that is not
+  built yet ([dotagents#495][da495]), so until it is this is a discipline
+  rather than a gate.
+
 ## Merge policy & versioning
 
 - **`master` is PR-only**, enforced today by the local `no-commit-to-branch`
@@ -418,3 +453,4 @@ Full dimension status:
 [i9]: https://github.com/harleypig/mxroute-email-filters/issues/9
 [i13]: https://github.com/harleypig/mxroute-email-filters/issues/13
 [i10]: https://github.com/harleypig/mxroute-email-filters/issues/10
+[da495]: https://github.com/harleypig/dotagents/issues/495
