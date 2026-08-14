@@ -121,12 +121,72 @@ the Sieve script from it, and **replace** the server's rules with the
 generated set — plus an `import` that reads the account's current rules back
 *into* that file so adoption is not a retyping exercise.
 [`gmailctl`][gmailctl] is the UX to copy: a declarative config, a `diff`
-against what is deployed, then an `apply`. Note what it chose to *write* that
-config in, though — **Jsonnet, not plain YAML**, and deliberately: filter sets
-are repetitive, and a plain data format gives you no way to factor out a
-shared condition or name a list of correspondents once. Either accept the
-repetition, or pick a format with variables and functions. Worth settling
-before the schema is designed, because it is expensive to change afterwards.
+against what is deployed, then an `apply`.
+
+### Which format — surveyed 2026-08-14, deliberately NOT decided
+
+Nothing in the tool leans either way (`criteria.Criteria` plus an action list
+is the representation either format deserializes into), so this was left open
+on purpose rather than decided early. The survey, so it need not be redone:
+
+**gmailctl writes its config in Jsonnet, not YAML, and deliberately** — filter
+sets are repetitive, and a plain data format gives you no way to factor out a
+shared condition or name a list of correspondents once.
+
+**But the round-trip should decide this, not the ergonomics.** The safety
+invariant above is *replace only what you imported*, and import has to
+**write** this file. **Data round-trips; programs do not.** If the format is
+Jsonnet, importing means generating a *program*, so any abstraction written by
+hand flattens back to literals on the next import — refactor, import, and the
+factoring evaporates. Same class of quiet loss as the Roundcube rule names,
+except structural rather than fixable.
+
+| | YAML | Jsonnet |
+|---|---|---|
+| Learning curve | none | a real language |
+| Abstraction | none (anchors give a little, no parameters) | functions, variables, imports |
+| Round-trips on import | **yes** | **no** — hand-written abstractions flatten |
+| Comments survive import | yes, via `ruamel.yaml` | n/a |
+| Dependency | pure Python | a C++/Go binding |
+
+One YAML footgun is specific to this domain and will bite exactly once:
+**`*` is YAML's alias sigil, and Sieve `:matches` patterns start with `*`.**
+`from: *@lists.example.com` is a parse error; `from: "*@lists.example.com"`
+is fine. A schema plus a documented quoting rule handles it.
+
+#### The two-layer escape hatch — how to get both
+
+The trap is assuming the format mxfilter *reads* must also be where shortcuts
+are written. It does not have to be, and separating the two dissolves the
+question:
+
+- **Layer 1 — what mxfilter reads: a plain list of rules.** Dumb data. No
+  variables, no functions, nothing clever. The only thing mxfilter ever has to
+  understand.
+- **Layer 2 — optional, and nothing to do with mxfilter: whatever produced
+  that list.** If writing twelve near-identical rules by hand gets annoying,
+  write something that prints layer 1 and pipe it in:
+
+  ```bash
+  jsonnet filters.jsonnet | mxfilter apply -f -
+  ```
+
+  Jsonnet, Python, a template, `make` — mxfilter cannot tell the difference,
+  because all it ever sees is layer 1.
+
+So abstraction is available whenever it is wanted, without the tool growing a
+language, and **import always has a faithful target to write**: it regenerates
+layer 1, which is data and round-trips cleanly.
+
+**The honest cost:** import gives back layer 1 only. It cannot reconstruct a
+generator, so re-importing after editing filters in webmail means reconciling
+that against layer 2 by hand. Visible and understood — which is the whole
+difference from the silent flattening that Jsonnet-as-input causes.
+
+**The one thing this asks of the implementation:** accept the rule list on
+**stdin** as well as from a file, so layer 2 is possible from day one. Nothing
+else about the decision needs settling up front.
+
 Prior art for the Sieve half exists
 too — [Transiever.SieveRuler][sieveruler] builds Sieve from provider-neutral
 JSON rule documents and *reconciles* them against the deployed script rather
