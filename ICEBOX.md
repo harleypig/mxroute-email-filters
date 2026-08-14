@@ -28,6 +28,11 @@ nobody has asked for. Revisit only when something concrete would consume it.
 vacation extension — **trigger: MXroute is confirmed to enable the `vacation`
 extension, *and* there is a real need for it.**
 
+**Half this trigger has now fired.** A live `mxfilter test` on 2026-08-14
+found `vacation` **advertised** by the server, so the availability question is
+answered for that account. The second half — a real need — has not, and the
+entry stays iceboxed on that alone.
+
 The tool refuses `vacation` today and points at the control panel. That
 refusal is a **conservative default, not a documented MXroute limitation** —
 unlike `redirect`, no MXroute source says either way

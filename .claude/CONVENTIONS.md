@@ -82,7 +82,7 @@ environment variable → the TOML config file
 (`$XDG_CONFIG_HOME/mxfilter/config.toml`) → a built-in default. The password
 is the exception and is handled separately (*Credentials*).
 
-### Confidence — what MXroute actually documents
+### Confidence — documented, observed, and unknown
 
 MXroute documents very little of its Sieve surface, and the gaps are
 themselves a design driver (they are why *Discover, don't hardcode* below is a
@@ -107,27 +107,57 @@ promote one tier to another.
     not Sieve rules. Do not read it as filter support and re-open the
     question.
 
-**Likely, not confirmed:**
+**Observed on one account — `mxfilter test`, 2026-08-14:**
 
-- The folder hierarchy separator is **`.`** (Dovecot Maildir++), and the spam
-  folder is **`INBOX.spam` — lowercase, not `INBOX.Junk`**. The evidence is an
-  incidental filesystem path in a blog post (`.../Maildir/.INBOX.spam`), not a
-  documented statement. Treat it as a hint that makes a runtime-discovered
-  value plausible, never as something to hardcode.
+A live read against a single MXroute server settled several of these. It is a
+**separate tier on purpose**: an observation is stronger than a guess and
+weaker than documentation, and it describes *that server* rather than MXroute.
+
+| Observed | Value |
+|---|---|
+| ManageSieve port + TLS | **4190 + STARTTLS works** — the protocol default was right |
+| Folder delimiter | **`.`** — Maildir++, as the blog-post path suggested |
+| Spam folder | **`INBOX.spam` exists** |
+| Active script name | **`managesieve`** |
+| `vacation` | **advertised** |
+| `enotify` | **not advertised** |
+| `FILTER=SIEVE` | **not advertised** — no server-side retroactive filtering |
+| `spamtest`, `extlists` | **not advertised** |
+| `regex`, `mailbox`, `imap4flags`, `copy`, `envelope` | **advertised** |
+
+**This does not license hardcoding any of it**, and the reason matters: the
+tool discovers these at runtime not because we were unsure what *this* account
+reports, but because MXroute is mid-migration on both its panel and Dovecot
+(*Discover, don't hardcode*, below). An observation dated today says nothing
+about the same server next quarter, and nothing about anyone else's server.
+The script name in particular is a per-server configuration value
+(`managesieve_script_name`), so it is the **least** generalizable item here.
+
+**`vacation` being advertised changes the status of our refusal.** mxfilter
+still refuses both `vacation` and `notify`, but they are no longer refusals of
+the same kind: `enotify` is **not advertised** on this server, while
+`vacation` **is** — so declining to emit it is a **deliberate choice of ours**
+(the control panel does autoresponders, and a Sieve autoresponder has real
+footguns), where declining an action the server never advertised is barely a
+choice at all.
+
+The shared refusal message is still correct for both and needs no tailoring:
+it says the refusal is ours rather than a documented MXroute restriction, and
+points at `mxfilter test` to find out what this server actually advertises.
+Distinguishing the two in the message would bake a per-server observation into
+a string, which is precisely what *Discover, don't hardcode* exists to
+prevent.
+
+Half the trigger on the `vacation` icebox entry has therefore fired; see
+[ICEBOX.md](../ICEBOX.md).
 
 **Unconfirmed — say so plainly rather than filling the gap:**
 
-- **The ManageSieve port and its TLS mode.** 4190 + STARTTLS is the
-  IANA/RFC 5804 and Dovecot default; MXroute documents **neither**. Both are
-  configurable (`--sieve-port`, `--sieve-tls`) precisely because of this.
-- **Whether `notify` is disabled.** No MXroute source says either way — same
-  for `vacation`, `extlists`, and `spamtest`. The tool refuses `notify` and
-  `vacation` as a **conservative default** with a message pointing at the
-  control panel; that is our choice, not a documented MXroute limitation.
-- **ManageSieve script-size, script-count, and rate limits.**
-- **Which script name Roundcube's managesieve plugin writes.** It is a
-  server-side configuration value (`managesieve_script_name`), so it is
-  discovered, not assumed.
+- **Whether any of the observations above generalize.** MXroute documents
+  neither the ManageSieve port, the TLS mode, the delimiter, nor the extension
+  set. Every one of those rows is one server on one day.
+- **ManageSieve script-size, script-count, and rate limits.** Nothing in the
+  `CAPABILITY` response speaks to these, so a live read cannot settle them.
 
 ### Discover, don't hardcode
 

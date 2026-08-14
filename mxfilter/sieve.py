@@ -68,11 +68,17 @@ MXROUTE_FORBIDDEN_ACTIONS = {
     ),
 }
 
-# NOT known to be disabled -- mxfilter simply does not generate these. No
-# MXroute source says anything either way about enotify, vacation,
-# extlists, or spamtest, so nothing here should claim they are unavailable.
-# Whether this particular server supports one is a question its CAPABILITY
-# response answers; run 'mxfilter test'.
+# NOT refused because MXroute disables them -- mxfilter simply does not
+# generate them. No MXroute *documentation* says anything either way, so
+# nothing here should claim they are unavailable.
+#
+# A live read on one account (2026-08-14) found `vacation` ADVERTISED and
+# `enotify` absent, which makes these two refusals different in kind even
+# though they share a message: declining to emit an action the server would
+# accept is a choice of ours, where declining one it never advertised is
+# not. Neither is a documented MXroute restriction, which is the thing the
+# message must not imply. What a given server supports is a question its
+# CAPABILITY response answers; run 'mxfilter test'.
 UNIMPLEMENTED_ACTIONS = {
     "notify": "notify (enotify)",
     "vacation": "vacation",
