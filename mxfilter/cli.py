@@ -25,8 +25,10 @@ from .sieve import (
     merge_rule,
     parse_script,
     remove_rule,
+    resolve_backup_target,
     rule_names,
     script_diff,
+    write_backup,
 )
 
 __all__ = ["build_parser", "main"]
@@ -655,6 +657,56 @@ def cmd_show(args) -> int:
 
 
 # ----------------------------------------------------------------------------
+def cmd_backup(args) -> int:
+    """Save the active script to a file, exactly as the server has it."""
+    config = configure(args)
+
+    with SieveSession(config, progress=progress_for(args, "sieve")) as sieve:
+        name = sieve.active_script_name()
+
+        if not name:
+            raise MxFilterError(
+                "no active script on the server, so there is nothing to back "
+                "up. 'mxfilter list' shows what the account has."
+            )
+
+        source = sieve.get_script(name)
+        target = resolve_backup_target(args.output, name, config.backup_dir)
+
+        if args.dry_run:
+            print(
+                f"[dry-run] would write {rule_count_phrase(source)} to "
+                f"{target}"
+            )
+
+            return 0
+
+        # Written before the script is parsed: counting its rules is a
+        # nicety, and a script too broken to parse is exactly the one worth
+        # having a copy of.
+        write_backup(source, target)
+
+    print(f"wrote {rule_count_phrase(source)} to {target}")
+
+    return 0
+
+
+# ----------------------------------------------------------------------------
+def rule_count_phrase(source: str) -> str:
+    """Describe how many rules a script holds, for the summary line.
+
+    A script that will not parse is still worth backing up -- it is the
+    case where a copy matters most -- so a parse failure is reported here
+    rather than raised, and only after the bytes are already on disk.
+    """
+    try:
+        return f"{len(rule_names(parse_script(source)))} rule(s)"
+
+    except MxFilterError:
+        return "a script mxfilter could not parse"
+
+
+# ----------------------------------------------------------------------------
 def cmd_folders(args) -> int:
     """List IMAP folders and the detected hierarchy delimiter."""
     config = configure(args)
@@ -1100,7 +1152,9 @@ def connection_parser() -> argparse.ArgumentParser:
     group.add_argument(
         "--backup-dir",
         dest="backup_dir",
-        help="where pre-upload script backups are written",
+        help="where script backups are written, both the automatic "
+        "pre-upload one and 'mxfilter backup'; default "
+        "$XDG_CONFIG_HOME/mxfilter/backups",
     )
 
     return parser
@@ -1278,6 +1332,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     show.add_argument("name", nargs="?", help="script name; default active")
     show.set_defaults(handler=cmd_show)
+
+    backup = subparsers.add_parser(
+        "backup",
+        parents=[common, connection],
+        help="save the active script to a file",
+        description="Save the active Sieve script to a file, byte for byte "
+        "as the server has it -- no banner lines, nothing reformatted "
+        "(which is what 'mxfilter show' adds, and why it is not a backup). "
+        "The file is written mode 0600, in a directory created 0700 if it "
+        "was not there. Nothing on the server is touched. NOTE: mxfilter "
+        "has no restore command; putting a backup back needs another "
+        "ManageSieve client, such as sieve-connect, or the panel's own "
+        "filter UI if it exposes a raw import.",
+    )
+    backup.add_argument(
+        "--output",
+        "-o",
+        metavar="PATH",
+        help="where to write it. A PATH ending in '/', or naming a "
+        "directory that already exists, means 'put the default filename "
+        "in here'; anything else is the exact file to write. Default: "
+        "the backup directory (--backup-dir), named "
+        "<script>-<UTC timestamp>.sieve",
+    )
+    backup.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="report the file that would be written; write nothing",
+    )
+    backup.set_defaults(handler=cmd_backup)
 
     folders = subparsers.add_parser(
         "folders", parents=[common, connection], help="list IMAP folders"

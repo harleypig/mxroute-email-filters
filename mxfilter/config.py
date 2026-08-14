@@ -22,7 +22,14 @@ from pathlib import Path
 
 from . import MxFilterError
 
-__all__ = ["Config", "Secret", "config_path", "load_config"]
+__all__ = [
+    "Config",
+    "Secret",
+    "config_dir",
+    "config_path",
+    "default_backup_dir",
+    "load_config",
+]
 
 DEFAULT_SIEVE_PORT = 4190
 DEFAULT_IMAP_PORT = 993
@@ -291,19 +298,39 @@ class Config:
 
 
 # ----------------------------------------------------------------------------
-def config_path() -> Path:
-    """Return the TOML config location, honouring ``XDG_CONFIG_HOME``."""
+def config_dir() -> Path:
+    """Return mxfilter's own directory, honouring ``XDG_CONFIG_HOME``."""
     base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
 
-    return Path(base) / "mxfilter" / "config.toml"
+    return Path(base) / "mxfilter"
+
+
+# ----------------------------------------------------------------------------
+def config_path() -> Path:
+    """Return the TOML config location, honouring ``XDG_CONFIG_HOME``."""
+    return config_dir() / "config.toml"
 
 
 # ----------------------------------------------------------------------------
 def default_backup_dir() -> Path:
-    """Return where pre-upload script backups are written by default."""
-    base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+    """Return where script backups are written by default.
 
-    return Path(base) / "mxfilter" / "backups"
+    This is the **config** directory, not the state directory. XDG would
+    call a backup state -- it is machine-generated data the program can
+    recreate, not something the user edits -- and putting it here is a
+    deliberate departure from that, not something XDG endorses.
+
+    The reason is that a backup the user cannot find is not a backup. The
+    config directory is the one mxfilter path a user already knows, having
+    put ``config.toml`` there; ``~/.local/state`` is a path most people
+    have never opened, and the moment it matters is the moment a script
+    has just been mangled and nobody wants to go looking. Co-locating also
+    keeps ``mxfilter backup`` and the automatic pre-upload backup in one
+    place instead of two.
+
+    ``MXROUTE_BACKUP_DIR`` / ``backup_dir`` override it either way.
+    """
+    return config_dir() / "backups"
 
 
 # ----------------------------------------------------------------------------
