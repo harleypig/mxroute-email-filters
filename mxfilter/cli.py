@@ -36,16 +36,17 @@ from .sieve import (
     PLACE_LAST,
     REPORTABLE_EXTENSIONS,
     UNIMPLEMENTED_ACTIONS,
+    DisplayDiff,
     Placement,
     SieveSession,
     backup_script,
+    display_diff,
     merge_rule,
     parse_script,
     remove_rule,
     resolve_backup_target,
     resolve_position,
     rule_names,
-    script_diff,
     write_backup,
 )
 
@@ -55,6 +56,19 @@ DEFAULT_SCRIPT_NAME = "mxfilter"
 DEFAULT_MOVE_THRESHOLD = 25
 DEFAULT_MAX_MESSAGES = 500
 PREVIEW_LIMIT = 20
+
+# The headers a person recognises one of their own emails by, shown by
+# 'from-message' before it derives anything. List-Id earns its place
+# beside the obvious four because '--derive auto' prefers it, so a rule
+# derived from a mailing list has to show the header it came from.
+IDENTIFYING_HEADERS = ("Date", "From", "To", "Subject", "List-Id")
+
+# Wide enough that a real Subject or List-Id survives whole, capped so a
+# pathological header cannot flood the screen. Deliberately wider than the
+# preview table's columns: this is the step where the operator confirms
+# they picked the right message, and clipping the value being verified
+# defeats the purpose.
+HEADER_WIDTH = 100
 
 
 # ############################################################################
@@ -531,6 +545,33 @@ def report_folder_creation(result: FolderCreation) -> None:
         f"Created IMAP folder {folder!r}; not subscribed (--no-subscribe), "
         f"so it will not appear in webmail."
     )
+
+
+# ----------------------------------------------------------------------------
+def print_script_diff(report: DisplayDiff) -> None:
+    """Show the diff, and say what the diff itself is not showing.
+
+    Both sides are rendered in mxfilter's own formatting so the rule
+    change is legible rather than buried under the renderer's layout. The
+    cost of that is a reformat the reader can no longer see in the diff,
+    and hiding it silently would be a worse trade than the noise it
+    removes -- so it is reported instead.
+
+    The note only appears while the server's copy is in some other
+    formatting, which stops being true from the first upload on. A note
+    that never went away would be read as boilerplate and stop being read
+    at all.
+    """
+    if report.reformats:
+        print(
+            "\nNote: the script on the server is not in mxfilter's "
+            "formatting, so uploading re-indents the whole file. The diff "
+            "below shows only the rule change; no rule body is altered."
+        )
+
+    print("\n--- sieve diff ---")
+    print(report.text if report.text.strip() else "(no change)")
+    print("--- end diff ---")
 
 
 # ----------------------------------------------------------------------------
@@ -1119,11 +1160,7 @@ def run_add(config, args, criteria: Criteria) -> int:
         # after a rule whose stop means it will never be reached.
         warn_about_placement(before, name, criteria, actions, placement)
 
-        diff = script_diff(before, after, script_name)
-
-        print("\n--- sieve diff ---")
-        print(diff if diff.strip() else "(no change)")
-        print("--- end diff ---")
+        print_script_diff(display_diff(before, after, script_name))
 
         if args.dry_run:
             print("\n[dry-run] the script was NOT uploaded.")
@@ -1215,11 +1252,8 @@ def cmd_remove_rule(args) -> int:
             raise MxFilterError(f"script {script_name!r} is empty")
 
         after = remove_rule(before, args.rule_name)
-        diff = script_diff(before, after, script_name)
 
-        print("--- sieve diff ---")
-        print(diff if diff.strip() else "(no change)")
-        print("--- end diff ---")
+        print_script_diff(display_diff(before, after, script_name))
 
         if args.dry_run:
             print("\n[dry-run] the script was NOT uploaded.")
@@ -1236,6 +1270,33 @@ def cmd_remove_rule(args) -> int:
         upload(sieve, config, script_name, before, after, args)
 
     return 0
+
+
+# ----------------------------------------------------------------------------
+def print_message(message, uid: int, folder: str) -> None:
+    """Show the message a rule is about to be derived from.
+
+    The UID is dug out of webmail by hand, so a mistyped digit otherwise
+    derives a filter from the wrong message -- and then moves mail on it.
+    Printing the derived criteria alone cannot catch that: criteria read as
+    perfectly plausible whichever message they came from, so the only
+    check is showing the message itself.
+
+    A header that is not there is not printed. An absent To or List-Id is
+    ordinary, and a row reading "(none)" would add noise to the block whose
+    whole job is to be scanned quickly.
+    """
+    print(f"Message uid {uid} in {folder!r}:")
+
+    for header in IDENTIFYING_HEADERS:
+        raw = message.get(header)
+
+        if not raw:
+            continue
+
+        value = clip(decode_header_value(raw), HEADER_WIDTH)
+
+        print(f"  {header + ':':<9}{value}")
 
 
 # ----------------------------------------------------------------------------
@@ -1269,9 +1330,14 @@ def cmd_from_message(args) -> int:
 
         message = imap.fetch_message_headers(args.folder, uid)
 
+    # Shown before the criteria, and before anything is derived, because
+    # this is the answer to "did I pick the right email?" -- the question
+    # the criteria below cannot answer.
+    print_message(message, uid, args.folder)
+
     criteria = derive_criteria(message, args)
 
-    print(f"Derived from uid {uid} in {args.folder!r}:")
+    print("\nDerived criteria:")
     print(f"  {criteria.describe()}")
 
     return run_add(config, args, criteria)

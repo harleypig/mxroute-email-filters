@@ -37,10 +37,12 @@ __all__ = [
     "ROUNDCUBE_NAME_MARKER",
     "SIEVELIB_NAME_MARKER",
     "UNIMPLEMENTED_ACTIONS",
+    "DisplayDiff",
     "Placement",
     "SieveSession",
     "backup_path",
     "backup_script",
+    "display_diff",
     "merge_rule",
     "parse_script",
     "remove_rule",
@@ -503,6 +505,53 @@ def script_diff(before: str, after: str, name: str = "sieve") -> str:
     )
 
     return "".join(lines)
+
+
+@dataclass(frozen=True)
+class DisplayDiff:
+    """A diff meant for a person, and the one thing it deliberately hides.
+
+    ``reformats`` is true when the script the server holds is not already
+    in the formatting :func:`render_script` produces -- brace placement,
+    indentation, the blank line after ``require``. The upload really does
+    rewrite all of that, so a reader shown only ``text`` has been told
+    less than the whole truth. Carrying the flag beside the diff is what
+    lets the front-end say so; dropping it would turn hiding the noise
+    into hiding the fact.
+    """
+
+    text: str
+    reformats: bool
+
+
+# ----------------------------------------------------------------------------
+def display_diff(before: str, after: str, name: str = "sieve") -> DisplayDiff:
+    """Diff two script versions with both sides in the same formatting.
+
+    Every merge re-renders the whole script through sievelib, so a diff
+    taken against the *raw* previous source reports the renderer's own
+    layout -- tabs to spaces, the brace pulled up onto the ``if`` line --
+    as though it were the change being proposed. Measured against a
+    Roundcube-authored script, a no-op round trip moves 29 lines of 25.
+    At a glance that is indistinguishable from something having gone badly
+    wrong, which defeats the whole point of showing a diff before
+    changing anything.
+
+    Rendering ``before`` the same way ``after`` was produced leaves only
+    the real change. It is a *display* concern and nothing more: what gets
+    uploaded and what gets backed up are untouched, and the backup stays
+    the server's exact bytes (CONVENTIONS.md).
+
+    A script that will not parse never reaches here -- ``merge_rule`` and
+    ``remove_rule`` both parse first, and both stop rather than risk
+    losing rules.
+    """
+    normalized = render_script(parse_script(before))
+
+    return DisplayDiff(
+        text=script_diff(normalized, after, name),
+        reformats=normalized != before,
+    )
 
 
 # ----------------------------------------------------------------------------
