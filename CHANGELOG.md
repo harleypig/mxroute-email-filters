@@ -4,6 +4,31 @@ Entries accumulate here under the usual headings — `BREAKING CHANGES:`,
 `FEATURES:`, `ENHANCEMENTS:`, `BUG FIXES:`, `NOTES:` — and move under a
 `## X.Y.Z` heading when a tag is cut.
 
+ENHANCEMENTS:
+
+* **`from-message` shows the message before it derives anything.** Date,
+  From, To, Subject, and List-Id when present, decoded. The UID is dug out
+  of webmail by hand, so a mistyped digit used to build a filter from the
+  wrong message and then move mail on it — with nothing on screen to
+  contradict you, since the only output was the derived criteria.
+
+  It earns its place when the UID is right, too: seeing `To:` reveals that
+  a message arrived at an alias, which is often the criterion you actually
+  wanted rather than the `From:` derived by default.
+
+* **The diff shows the change, not the reformatting.** Merging re-renders
+  the whole script through `sievelib`, so the first change against a
+  Roundcube-authored script moved almost every line — 29 of them on a
+  25-line script, with the one new rule buried inside. The diff is now taken
+  against a normalised copy of the original, so only the real change shows.
+
+  Reformatting still happens on upload, so it is **reported rather than
+  hidden**: a one-line note appears above the diff the first time, and stops
+  once the script is already in this formatting. Rule bodies are unchanged
+  either way ([ADR 0002](adr/0002-non-destructive-script-merge.md)), and
+  neither the backup nor what is uploaded is affected — normalisation is a
+  display concern only.
+
 ## 0.1.0
 
 Released 2026-08-14. The first tagged version; everything below is the work

@@ -103,6 +103,19 @@ assumptions below get settled for your account.
   that command would have changed: the Sieve diff for `add`, `from-message`,
   and `remove-rule`; the list of matching messages for `add`, `from-message`,
   and `apply`; the file that would have been written for `backup`.
+* `from-message` **shows you the message first** — Date, From, To, Subject,
+  and List-Id when it has one — before it derives anything and before it
+  writes a rule. The UID is something you read out of webmail by hand, and
+  the derived criteria look equally plausible whichever message produced
+  them, so the headers are the only thing that catches a mistyped digit
+  before mail starts moving.
+* The Sieve diff is shown with **both sides in mxfilter's own formatting**.
+  A merge re-renders the whole script, so a diff against the server's raw
+  copy would report every re-indented line as a change — on a hand-written
+  script that is most of the file, and it reads exactly like something
+  having gone wrong. The reformat is real, so mxfilter says so on a line
+  above the diff, and only while the server's copy is still in some other
+  formatting. What gets uploaded and what gets backed up are unaffected.
 * The current active script is backed up to a timestamped file before any
   upload, and the path is printed. `mxfilter backup` takes the same copy on
   demand, without changing anything on the server.
