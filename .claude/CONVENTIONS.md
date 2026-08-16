@@ -458,6 +458,85 @@ written down rather than rediscovered:
   built yet ([dotagents#495][da495]), so until it is this is a discipline
   rather than a gate.
 
+## How much we ask
+
+The section above is how the team routes work internally; this is how it
+engages the person the work is for. Recorded because the operator set it
+deliberately on 2026-08-16, in these words:
+
+> Record in this repos convention that I am testing the minimal involvement
+> aspect of dotagents. I want to test the condition of a client coming to me
+> with an idea, but no knowledge of how to accomplish it, little desire to
+> answer questions beyond the minimal needed. This is going to be a little
+> weird because the end product will be a docker image someone has to setup,
+> but that's the nature of testing. :shrug:
+
+So **this repo is a live test bed for the involvement dial**, held near its
+minimum. The operator is standing in as the client they describe, and
+"customer" throughout means them.
+
+**Involvement is how many questions we ask versus how many defaults we take,
+and it is the Project Manager's dial** (`customer-communication.md` *Length is
+a separate dial from depth*; `agents/project-manager.md` *Discovery before
+dispatch*). It is **not** the register dials — depth and length — which are
+the Product Owner's. Keeping the two apart is the entire point of the
+distinction, and this is precisely the setting that invites collapsing them:
+this one says **ask less**, not **say less**. Answer a complaint about how
+much we ask by writing shorter answers and we have tuned the wrong dial, left
+the real one untouched, and guaranteed the complaint comes back.
+
+**The client being simulated has an idea and no route to it.** They do not
+know how it would be accomplished and have little appetite for finding out.
+Working out the *how* is therefore the job rather than the thing to ask about
+— a question is a cost charged to them, so the default posture is to resolve
+the unknown and bring back a result.
+
+In practice:
+
+- **Apply the scoping rule above instead of asking whether something is in
+  scope.** *Is it a filter or a setting, and is there no way to manage it
+  here?* — if so, the answer is yes and no decision is needed. That rule
+  exists because a batch of questions should have been an answer; the #42/#43
+  worked example under *The scoping rule* is the case that produced it.
+- **Run the decide-now gate hard** (`issue-evaluation.md`). If a rule, the
+  code, or a documented default settles it, it is not a question — answer it,
+  and record the answer where it belongs.
+- **Report decisions; do not request permission** (`departure-reporting.md`).
+  Proceed on the better judgment and say what was done and why. Asking first
+  suppresses the departures that were right, which are the majority, in order
+  to catch the few that were not.
+- **Batch what genuinely must be asked** — few at a time, each answerable in a
+  sentence. `AskUserQuestion` is the shape that has worked here.
+
+**The escalate bar does not move with the dial** (`issue-evaluation.md`
+*escalate*). Ask when they know something we cannot work out — a fact about
+their accounts, their mail, or what they actually want — or when the answer
+gets expensive to change. And a **Tier 3** change (`change-cost-tiers.md`)
+stops and asks regardless of the dial: real risk is the one tier where being
+wrong is not recoverable by more work, and a preference for fewer questions is
+never authority to take that risk on their behalf.
+
+**The test has a known flaw, and it is accepted rather than compensated for.**
+The end product is a Docker image somebody has to set up, which is not what a
+genuinely minimal-involvement client wants handed to them; the operator named
+this themselves in the same breath as setting the dial. It is not a reason to
+abandon the test, and it is specifically not a reason to quietly start asking
+more — raising involvement because the deliverable is awkward destroys the
+thing being measured.
+
+**Being a test, it is supposed to produce findings.** Where the setting causes
+a wrong turn — a default taken that should have been a question, an assumption
+that sent work down the wrong path — that *is* the result the test exists to
+produce, and it gets recorded rather than silently corrected, because a
+quietly-fixed wrong turn is a data point destroyed. When the operator says
+anything about how much we ask, update this section with the date and what
+they said: the same recording discipline `customer-communication.md` applies
+to the register setting (*The setting is recorded, with its date and its
+evidence*),
+applied here to the dial actually under test. It is a live fact about this
+engagement rather than a style preference, so it belongs where the next agent
+will read it.
+
 ## Merge policy & versioning
 
 - **`master` is PR-only**, enforced today by the local `no-commit-to-branch`
