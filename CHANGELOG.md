@@ -29,6 +29,39 @@ ENHANCEMENTS:
   neither the backup nor what is uploaded is affected — normalisation is a
   display concern only.
 
+BUG FIXES:
+
+* **Bulk IMAP commands are split into batches, so raising `--max-messages`
+  is no longer dangerous.** `IMAPClient` joins every UID onto one command
+  line, and nothing here chunked it — a 4,000-message move emitted a single
+  command tens of kilobytes long, which a server is entitled to reject.
+
+  It had never bitten because `--max-messages` defaults to 500, which
+  capped it by accident: that flag exists to refuse a partial run, not to
+  keep a command line short. So the protection was invisible, and the first
+  person to raise the cap for a big cleanup — the one thing the flag is for
+  — would have removed it without knowing it was there.
+
+  Moves, copies, flagging, deletes, expunges, and the header re-check now
+  batch at 600 UIDs, chosen against RFC 2683's "at least 8000 octets" line
+  budget and deliberately **not** derived from `--max-messages`. The cap
+  stays a policy ceiling you set; batching is a transport detail with no
+  flag ([#24](https://github.com/harleypig/mxroute-email-filters/issues/24)).
+
+NOTES:
+
+* **A bulk operation can now stop half way, and reports what it managed.**
+  Batching is what makes that reachable — one command is atomic, seven are
+  not — so the outcome is no longer only "worked" or "failed". A run that
+  stops says how many messages it handled, names the UIDs it never touched,
+  and states whether re-running is safe. It normally is: the command
+  searches again, so it acts only on what is still there.
+
+  The exception is a server with no `MOVE`, where the fallback copies and
+  then deletes. A copy that lands whose removal fails leaves that mail in
+  **both** folders, so re-running would copy it twice. Those UIDs are listed
+  under a warning telling you to clear one side first.
+
 ## 0.1.0
 
 Released 2026-08-14. The first tagged version; everything below is the work

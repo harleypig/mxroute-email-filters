@@ -142,6 +142,23 @@ assumptions below get settled for your account.
 * `--max-messages` (default 500) refuses the whole batch when more matches
   than that come back. It never processes a partial set: silent truncation
   reads as "it handled everything" when it did not.
+* **Raising `--max-messages` is safe now, and was not before.** Bulk IMAP
+  commands are split into batches of 600 UIDs regardless of what the cap
+  says, because the underlying library puts every UID on one command line
+  and servers limit how long that line may be. Until this was fixed, the
+  500-message default was the only thing keeping that line short — so
+  raising the cap for a big cleanup, the one thing the flag exists for,
+  quietly removed a protection nobody had been told about. The batch size
+  is a transport detail with no flag: it is not something you should have
+  to think about, and it is deliberately not derived from the cap.
+* **A large run can now stop half way, and says so precisely.** One command
+  either happens or does not; seven of them can fail at the third. When
+  that happens mxfilter reports how many messages were handled, names the
+  UIDs it never touched, and says whether re-running is safe — it normally
+  is, because the command searches again and so acts only on what is left.
+  The exception is a server with no `MOVE`, where a copy that lands but
+  cannot be removed leaves that mail in **both** folders; mxfilter warns,
+  lists those UIDs, and tells you to delete one side before re-running.
 * A `--fileinto` target that does not exist is a **warning, not an error**,
   unless you pass `--create-folder`. `add` will still write the rule, and
   mail filed there by the server later may be lost. `apply` refuses outright,

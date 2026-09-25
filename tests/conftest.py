@@ -171,6 +171,13 @@ class FakeIMAPClient:
         self.caps = {"MOVE", "UIDPLUS"}
         self.failures: dict[str, Exception] = {}
 
+        # Fail a method only after it has already succeeded N times. That
+        # is the shape a batched operation fails in -- the third command is
+        # refused and the first two have already happened -- and it is the
+        # only state the partial-completion report can be tested against.
+        self.fail_after: dict[str, tuple[int, Exception]] = {}
+        self.counts: dict[str, int] = {}
+
         # A server that answers OK to SUBSCRIBE and does not act on it.
         # Nothing advertises this, so the only defence is re-reading LSUB.
         self.subscribe_takes_effect = True
@@ -178,10 +185,17 @@ class FakeIMAPClient:
     # ------------------------------------------------------------------------
     def _maybe_fail(self, name: str) -> None:
         """Raise whatever the test armed this method with."""
+        self.counts[name] = self.counts.get(name, 0) + 1
+
         error = self.failures.get(name)
 
         if error is not None:
             raise error
+
+        armed = self.fail_after.get(name)
+
+        if armed is not None and self.counts[name] > armed[0]:
+            raise armed[1]
 
     # ------------------------------------------------------------------------
     def login(self, user, password) -> None:
@@ -286,10 +300,12 @@ class FakeIMAPClient:
 
     # ------------------------------------------------------------------------
     def uid_expunge(self, uids) -> None:
+        self._maybe_fail("uid_expunge")
         self.calls.append(("uid_expunge", tuple(uids)))
 
     # ------------------------------------------------------------------------
     def expunge(self) -> None:
+        self._maybe_fail("expunge")
         self.calls.append(("expunge",))
 
     # ------------------------------------------------------------------------

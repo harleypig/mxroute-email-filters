@@ -18,6 +18,15 @@ The same trap applies to the spam folder, which on MXRoute is
 second folder next to the real one, so folder names are matched against the
 server's own list (case-insensitively) rather than taken on trust.
 
+Every bulk command is split into fixed-size batches of UIDs, because
+IMAPClient puts the whole set on one command line and servers limit how
+long that line may be. Batching is purely a transport concern and is
+independent of ``--max-messages``, which is a policy ceiling the user sets;
+tying the two together is what let raising the cap quietly remove a
+protection (issue #24). The cost is that a bulk operation is no longer one
+command, so it can now stop half way -- ``PartialBatchError`` is what says
+so, and says which messages made it.
+
 Existing and visible are also two different questions, which is why both
 folder views are cached. ``LIST`` reports what the account has; ``LSUB``
 reports what the user subscribed to, and a webmail client -- Roundcube
@@ -31,9 +40,10 @@ import contextlib
 import email
 import socket
 import ssl
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from email.header import decode_header, make_header
+from typing import ClassVar, NoReturn
 
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError, LoginError
@@ -43,15 +53,224 @@ from .config import Config
 from .criteria import Criteria
 
 __all__ = [
+    "UID_BATCH_SIZE",
     "FolderCreation",
     "ImapSession",
     "MailActionPlan",
     "MailActionResult",
     "MessageSummary",
+    "PartialBatchError",
     "decode_header_value",
     "normalize_folder",
     "split_path",
+    "uid_batches",
 ]
+
+
+# ############################################################################
+# Batching
+# ############################################################################
+
+# How many UIDs go into a single IMAP command.
+#
+# IMAPClient joins a UID set with commas and never collapses runs into
+# ranges, so the command line grows linearly with the number of messages: a
+# UID is at most ten digits plus its comma, which puts 600 of them at about
+# 6.6 kB in the worst case and nearer 4 kB with the four- to six-digit UIDs
+# a personal mailbox actually has.
+#
+# The number is a budget, not a measurement. Nothing in IMAP advertises how
+# long a command line a server will accept, so there is nothing to discover
+# and the only honest option is a conservative constant (CONVENTIONS.md >
+# Discover, don't hardcode). The budget itself comes from RFC 2683 s3.2.1.5,
+# which asks servers to allow "a command line of at least 8000 octets" -- a
+# worst case of 6.6 kB therefore fits inside the shortest line any server is
+# expected to take, with room left for the command and the tag.
+#
+# It is deliberately NOT the --max-messages default, and must never be
+# derived from it. --max-messages is a policy ceiling the user sets on how
+# much mail to touch; this is a transport detail they should never have to
+# think about. Coupling the two is the defect this constant removes (issue
+# #24): the cap was silently doing a second, undocumented job, so raising
+# it -- the one thing it exists for -- took away a protection nobody knew
+# was there.
+#
+# ICEBOX: collapsing contiguous UIDs into ranges ("1:600") is what RFC 2683
+# actually recommends, and it would shrink the command line by an order of
+# magnitude, letting each batch carry far more messages. Deliberately not
+# done: UID range compression has to be exactly right or it moves mail the
+# user never asked about, and a plain count is enough at personal-mailbox
+# scale. Revisit only if batching itself becomes a bottleneck.
+UID_BATCH_SIZE = 600
+
+
+# ----------------------------------------------------------------------------
+def uid_batches(
+    uids: Sequence[int], size: int = UID_BATCH_SIZE
+) -> Iterator[list[int]]:
+    """Split a UID list into command-sized batches, in order.
+
+    Order is preserved because it is what makes a partial failure
+    describable: the messages that got through are a prefix of the list, so
+    the report can say "everything up to UID N", rather than handing back a
+    scatter the user has to reconcile by hand.
+    """
+    if size < 1:
+        raise MxFilterError(f"batch size must be at least 1, got {size}")
+
+    for start in range(0, len(uids), size):
+        yield list(uids[start : start + size])
+
+
+# ----------------------------------------------------------------------------
+def summarize_uids(uids: Sequence[int], shown: int = 10) -> str:
+    """Render a UID list compactly enough to put in an error message."""
+    if not uids:
+        return "none"
+
+    head = ", ".join(str(uid) for uid in uids[:shown])
+
+    if len(uids) <= shown:
+        return head
+
+    return f"{head} and {len(uids) - shown} more"
+
+
+class PartialBatchError(MxFilterError):
+    """A bulk operation stopped part way through, having done some of it.
+
+    Batching is what makes this reachable. One IMAP command either happens
+    or does not; seven of them can stop at the third, leaving two done, one
+    failed, and four never attempted. Reporting that as a plain failure
+    would be wrong in the expensive direction -- the user would re-run
+    believing nothing had happened, or give up believing everything had.
+
+    So the outcome is carried as data: which UIDs went through, which did
+    not, and (for the COPY+EXPUNGE fallback only) which ended up in both
+    folders because the copy landed and the removal did not. ``result``
+    records what the whole plan achieved, since flagging happens before any
+    move and may well have finished.
+    """
+
+    # A verb that reads correctly in "N message(s) were ___".
+    PAST_TENSE: ClassVar[dict[str, str]] = {
+        "flag": "flagged",
+        "move": "moved",
+        "delete": "deleted",
+    }
+
+    # ------------------------------------------------------------------------
+    def __init__(
+        self,
+        operation: str,
+        completed: Sequence[int],
+        remaining: Sequence[int],
+        reason: str,
+        destination: str = "",
+        source: str = "",
+        duplicated: Sequence[int] = (),
+    ):
+        super().__init__(operation)
+
+        self.operation = operation
+        self.completed = tuple(completed)
+        self.remaining = tuple(remaining)
+        self.duplicated = tuple(duplicated)
+        self.reason = reason
+        self.destination = destination
+        self.source = source
+        self.result = MailActionResult()
+
+    # ------------------------------------------------------------------------
+    @property
+    def total(self) -> int:
+        """How many messages the operation set out to handle."""
+        return len(self.completed) + len(self.duplicated) + len(self.remaining)
+
+    # ------------------------------------------------------------------------
+    def __str__(self) -> str:
+        """Say what happened, what did not, and what to do about it.
+
+        Written as one paragraph of plain sentences, the way the other
+        actionable failures in this tool are, and deliberately free of the
+        word "batch": how the work was split up is a transport detail, and
+        a user reading this needs to know what state their mail is in, not
+        how the command was framed.
+        """
+        return " ".join(
+            part
+            for part in (
+                self._what_happened(),
+                self._what_is_left(),
+                self._what_else_was_done(),
+                self._what_to_do_next(),
+            )
+            if part
+        )
+
+    # ------------------------------------------------------------------------
+    def _what_happened(self) -> str:
+        """The headline: how many of how many, and why it stopped."""
+        verb = self.PAST_TENSE.get(self.operation, self.operation)
+        where = f" from {self.source!r}" if self.source else ""
+        target = f" to {self.destination!r}" if self.destination else ""
+
+        return (
+            f"{len(self.completed)} of {self.total} message(s) were {verb}"
+            f"{where}{target} and then the server failed -- {self.reason}."
+        )
+
+    # ------------------------------------------------------------------------
+    def _what_is_left(self) -> str:
+        """Which messages were not touched, named precisely."""
+        if not self.remaining:
+            return ""
+
+        boundary = ""
+
+        if self.completed:
+            boundary = (
+                f"Every match with a UID at or below {max(self.completed)} "
+                f"was handled. "
+            )
+
+        return (
+            f"{boundary}{len(self.remaining)} message(s) were not touched "
+            f"(UIDs {summarize_uids(self.remaining)})."
+        )
+
+    # ------------------------------------------------------------------------
+    def _what_else_was_done(self) -> str:
+        """Steps that ran to completion before this one stopped."""
+        if self.operation == "flag" or not self.result.flagged:
+            return ""
+
+        return f"Flags were applied to all {self.result.flagged} message(s)."
+
+    # ------------------------------------------------------------------------
+    def _what_to_do_next(self) -> str:
+        """The recovery, which is different when copies were stranded.
+
+        Re-running is normally safe, and that is worth saying outright: the
+        command searches the source folder again, so it finds only what is
+        still there. The exception is a copy that could not be removed --
+        those messages are in both folders, so a re-run would copy them a
+        second time.
+        """
+        if not self.duplicated:
+            return (
+                "Re-running the same command is safe: it searches again, so "
+                "it acts only on what is left."
+            )
+
+        return (
+            f"WARNING: {len(self.duplicated)} message(s) were copied to "
+            f"{self.destination!r} but could not be removed from "
+            f"{self.source or 'the source folder'!r}, so they are now in "
+            f"both (UIDs {summarize_uids(self.duplicated)}). Re-running "
+            f"would copy them again -- delete them from one side first, "
+            f"then re-run to finish the rest."
+        )
 
 
 # ############################################################################
@@ -636,31 +855,75 @@ class ImapSession:
         flagged = 0
 
         if plan.flags:
-            self.add_flags(uids, [flag.encode() for flag in plan.flags])
+            with self._attributed_to(plan, "flagged"):
+                self.add_flags(uids, [flag.encode() for flag in plan.flags])
+
             flagged = len(uids)
 
         if plan.discard:
-            return MailActionResult(flagged=flagged, deleted=self.delete(uids))
+            with self._attributed_to(plan, "deleted", flagged=flagged):
+                deleted = self.delete(uids)
+
+            return MailActionResult(flagged=flagged, deleted=deleted)
 
         if plan.moves:
-            moved = self.move(uids, plan.destination)
+            with self._attributed_to(plan, "moved", flagged=flagged):
+                moved = self.move(uids, plan.destination)
 
             return MailActionResult(flagged=flagged, moved=moved)
 
         return MailActionResult(flagged=flagged)
 
     # ------------------------------------------------------------------------
+    @contextlib.contextmanager
+    def _attributed_to(
+        self, plan: MailActionPlan, counted: str, flagged: int = 0
+    ):
+        """Attach plan context to a partial failure on its way out.
+
+        The bulk operations know how far they got; only the plan knows
+        which folder the mail came from and what the earlier steps
+        achieved. Joining the two here completes the report without giving
+        the low-level operations a view of the plan they have no other use
+        for.
+
+        ``counted`` names the ``MailActionResult`` field the completed
+        count belongs in, and ``flagged`` carries forward a flagging step
+        that already finished.
+        """
+        try:
+            yield
+
+        except PartialBatchError as exc:
+            exc.source = plan.source
+            exc.result = MailActionResult(
+                **{"flagged": flagged, counted: len(exc.completed)}
+            )
+
+            raise
+
+    # ------------------------------------------------------------------------
     def _confirm(
         self, uids: list[int], criteria: Criteria, folder: str
     ) -> list[MessageSummary]:
-        """Fetch headers for candidates and keep only the real matches."""
+        """Fetch headers for candidates and keep only the real matches.
+
+        Batched like every other bulk command, and for the same reason: the
+        candidate set is whatever the server's SEARCH returned, which no cap
+        in this tool bounds. A folder with thousands of matches would
+        otherwise put thousands of UIDs on one FETCH line.
+        """
         client = self._require_client()
+        fetched: dict = {}
 
-        try:
-            fetched = client.fetch(uids, ["BODY.PEEK[HEADER]", "INTERNALDATE"])
+        for batch in uid_batches(uids):
+            try:
+                fetched.update(
+                    client.fetch(batch, ["BODY.PEEK[HEADER]", "INTERNALDATE"])
+                )
 
-        except IMAPClientError as exc:
-            raise MxFilterError(f"IMAP fetch failed -- {exc}") from exc
+            except IMAPClientError as exc:
+                raise MxFilterError(f"IMAP fetch failed -- {exc}") from exc
 
         matches = []
 
@@ -708,55 +971,182 @@ class ImapSession:
     def add_flags(self, uids: list[int], flags: list[str]) -> None:
         """Set flags on messages in the currently selected folder."""
         client = self._require_client()
-        self._log(f"flagging {len(uids)} message(s) with {flags}")
+        self._log(
+            f"flagging {len(uids)} message(s) with {flags} "
+            f"in batches of up to {UID_BATCH_SIZE}"
+        )
 
-        try:
-            client.add_flags(uids, flags)
+        done: list[int] = []
 
-        except IMAPClientError as exc:
-            raise MxFilterError(f"could not set flags -- {exc}") from exc
+        for batch in uid_batches(uids):
+            try:
+                client.add_flags(batch, flags)
+
+            except IMAPClientError as exc:
+                if not done:
+                    raise MxFilterError(
+                        f"could not set flags -- {exc}"
+                    ) from exc
+
+                raise PartialBatchError(
+                    operation="flag",
+                    completed=done,
+                    remaining=uids[len(done) :],
+                    reason=str(exc),
+                ) from exc
+
+            done.extend(batch)
 
     # ------------------------------------------------------------------------
     def move(self, uids: list[int], destination: str) -> int:
         """Move messages out of the selected folder into ``destination``.
 
-        Prefers RFC 6851 MOVE, which is atomic. The fallback is the classic
-        COPY + \\Deleted + EXPUNGE dance; UID EXPUNGE is used when UIDPLUS
-        is advertised so that only the copied messages are expunged, never
-        someone else's concurrently-deleted mail.
+        Prefers RFC 6851 MOVE, which is atomic per command. The fallback is
+        the classic COPY + \\Deleted + EXPUNGE dance; UID EXPUNGE is used
+        when UIDPLUS is advertised so that only the copied messages are
+        expunged, never someone else's concurrently-deleted mail.
         """
         client = self._require_client()
 
         if not uids:
             return 0
 
+        if client.has_capability("MOVE"):
+            return self._move_natively(client, uids, destination)
+
+        return self._move_by_copying(client, uids, destination)
+
+    # ------------------------------------------------------------------------
+    def _move_natively(
+        self, client: IMAPClient, uids: list[int], destination: str
+    ) -> int:
+        """MOVE in batches; a failed one leaves its mail where it was."""
+        self._log(
+            f"MOVE {len(uids)} message(s) to {destination!r} in batches of "
+            f"up to {UID_BATCH_SIZE}"
+        )
+
+        done: list[int] = []
+
+        for batch in uid_batches(uids):
+            try:
+                client.move(batch, destination)
+
+            except IMAPClientError as exc:
+                self._move_failed(uids, done, destination, exc)
+
+            done.extend(batch)
+
+        return len(done)
+
+    # ------------------------------------------------------------------------
+    def _move_by_copying(
+        self, client: IMAPClient, uids: list[int], destination: str
+    ) -> int:
+        """COPY + \\Deleted + EXPUNGE, for a server with no MOVE.
+
+        Three commands per batch instead of one, which is what makes the
+        stranded-copy case reachable: a copy that lands and a removal that
+        does not leaves the same mail in both folders. So the expunge is
+        issued even on the way out, finishing every batch that got as far
+        as being marked -- that is what keeps "re-running is safe" true for
+        the part that did complete.
+        """
+        self._log(
+            f"server has no MOVE; COPY+EXPUNGE {len(uids)} message(s) to "
+            f"{destination!r} in batches of up to {UID_BATCH_SIZE}"
+        )
+
+        copied: list[int] = []
+        stranded: list[int] = []
+        failure: IMAPClientError | None = None
+
+        for batch in uid_batches(uids):
+            try:
+                client.copy(batch, destination)
+
+            except IMAPClientError as exc:
+                failure = exc
+                break
+
+            try:
+                client.add_flags(batch, [b"\\Deleted"])
+
+            except IMAPClientError as exc:
+                stranded = batch
+                failure = exc
+                break
+
+            copied.extend(batch)
+
         try:
-            if client.has_capability("MOVE"):
-                self._log(f"MOVE {len(uids)} message(s) to {destination!r}")
-                client.move(uids, destination)
-
-                return len(uids)
-
-            self._log(
-                f"server has no MOVE; COPY+EXPUNGE {len(uids)} message(s) "
-                f"to {destination!r}"
-            )
-
-            client.copy(uids, destination)
-            client.add_flags(uids, [b"\\Deleted"])
-
-            if client.has_capability("UIDPLUS"):
-                client.uid_expunge(uids)
-
-            else:
-                client.expunge()
+            self._expunge(client, copied)
 
         except IMAPClientError as exc:
+            # The removal itself failed, so nothing was really moved: every
+            # copied message is now in both folders.
+            self._move_failed(
+                uids, [], destination, exc, duplicated=[*copied, *stranded]
+            )
+
+        if failure is not None:
+            self._move_failed(uids, copied, destination, failure, stranded)
+
+        return len(copied)
+
+    # ------------------------------------------------------------------------
+    @staticmethod
+    def _move_failed(
+        uids: list[int],
+        completed: list[int],
+        destination: str,
+        exc: IMAPClientError,
+        duplicated: Sequence[int] = (),
+    ) -> NoReturn:
+        """Raise the right failure for a move that did not finish.
+
+        A move that achieved nothing is an ordinary failure and keeps the
+        wording it always had. One that achieved something is a different
+        event and says so, because the difference decides what the user
+        does next.
+        """
+        if not completed and not duplicated:
             raise MxFilterError(
                 f"could not move messages to {destination!r} -- {exc}"
             ) from exc
 
-        return len(uids)
+        offset = len(completed) + len(duplicated)
+
+        raise PartialBatchError(
+            operation="move",
+            completed=completed,
+            remaining=uids[offset:],
+            reason=str(exc),
+            destination=destination,
+            duplicated=duplicated,
+        ) from exc
+
+    # ------------------------------------------------------------------------
+    @staticmethod
+    def _expunge(client: IMAPClient, uids: list[int]) -> None:
+        """Drop the \\Deleted messages, by UID where the server allows it.
+
+        With UIDPLUS the expunge is batched like everything else. Without
+        it there is no UID argument to batch -- EXPUNGE takes none -- so it
+        is issued once at the end rather than once per batch. That also
+        keeps the number of times a concurrent client's deleted mail can be
+        swept up at exactly one, as it was before batching.
+        """
+        if not uids:
+            return
+
+        if client.has_capability("UIDPLUS"):
+            for batch in uid_batches(uids):
+                client.uid_expunge(batch)
+
+            return
+
+        client.expunge()
 
     # ------------------------------------------------------------------------
     def delete(self, uids: list[int]) -> int:
@@ -766,21 +1156,47 @@ class ImapSession:
         if not uids:
             return 0
 
-        self._log(f"deleting {len(uids)} message(s)")
+        self._log(
+            f"deleting {len(uids)} message(s) in batches of up to "
+            f"{UID_BATCH_SIZE}"
+        )
+
+        marked: list[int] = []
+        failure: IMAPClientError | None = None
+
+        for batch in uid_batches(uids):
+            try:
+                client.add_flags(batch, [b"\\Deleted"])
+
+            except IMAPClientError as exc:
+                failure = exc
+                break
+
+            marked.extend(batch)
 
         try:
-            client.add_flags(uids, [b"\\Deleted"])
-
-            if client.has_capability("UIDPLUS"):
-                client.uid_expunge(uids)
-
-            else:
-                client.expunge()
+            self._expunge(client, marked)
 
         except IMAPClientError as exc:
-            raise MxFilterError(f"could not delete messages -- {exc}") from exc
+            # Marking succeeded and the removal did not, so nothing is
+            # actually gone -- report it as having deleted none.
+            failure = exc
+            marked = []
 
-        return len(uids)
+        if failure is None:
+            return len(marked)
+
+        if not marked:
+            raise MxFilterError(
+                f"could not delete messages -- {failure}"
+            ) from failure
+
+        raise PartialBatchError(
+            operation="delete",
+            completed=marked,
+            remaining=uids[len(marked) :],
+            reason=str(failure),
+        ) from failure
 
     # ------------------------------------------------------------------------
     def fetch_message_headers(self, folder: str, uid: int):
